@@ -768,6 +768,22 @@ describe('envelope observation', () => {
   })
 })
 
+describe('AbstractApiClient', () => {
+  it('mints RPC ids when secure-context randomUUID is unavailable', async () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues(bytes: Uint8Array) {
+        return bytes.fill(0)
+      },
+    })
+    try {
+      const response = await client().sessions.list({})
+      expect(response.rpcId).toBe('00000000-0000-4000-8000-000000000000')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('resolveBase', () => {
   it('prefers a real location.origin and falls back to the internal authority', async () => {
     class Probe extends AbstractApiClient {
