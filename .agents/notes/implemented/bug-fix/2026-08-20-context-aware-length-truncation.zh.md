@@ -31,6 +31,8 @@ Harness 的 token bucket 彼此不重叠，因此总提示 usage 为 `inputToken
 
 `packages/client/ui-conversation/tests/assistant-implicit-retry.client.spec.ts` 同时验证流式 attempt 规则的两个方向：同一 step 后续出现新流时会替换已作废的半截块；终止 attempt 若没有替代流，则仍作为 interrupted 输出可见。
 
+`examples/headless-agent/tests/length-compaction.snapshot.ts` 会让组装后的 headless 应用连接本地 DeepSeek 兼容 SSE server，完整执行无密钥恢复路径：一次工具轮次；一次输出尚未达到请求的 256,000-token 上限、但 usage 已抵达已配置 1,000,000-token 窗口的半截 `length` 响应；一次 32-token 压缩摘要调用；以及同一 step 的替代请求。其 inline snapshot 固定四次 provider 调用的输出预算 `[256000, 256000, 32, 256000]`、一次压缩请求、一次上下文错误、已记录但未提交的半截响应、完整 compaction 生命周期，以及最终输出 `LENGTH RECOVERED`。
+
 ## Alternatives considered
 
 **把所有短于请求上限的 `length` 都视为上下文压力。** 拒绝，因为 gateway 可能拥有独立 completion 上限，或者因其他原因在请求 cap 之前结束。若没有“总 usage 已抵达已配置模型窗口”的证据，自动压缩历史可能会破坏有用上下文，而且并不能修复真实原因。
