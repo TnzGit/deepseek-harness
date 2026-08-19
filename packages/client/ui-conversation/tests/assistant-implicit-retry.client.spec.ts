@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type {
-  AssistantChatData, ChatConversationViewNode, ChatSnapshot, ConversationEventInput,
+  ChatConversationViewNode, ChatSnapshot, ConversationEventInput,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { ConversationNodeAssembler } from '@deepseek-ai/dsh-client-runtime/client'
 import { assistantDefinition } from '../src/client/conversation-nodes/assistant.ts'
 import { chatViewDefinition } from '../src/client/conversation-nodes/chat-snapshot-builder.ts'
 import { unknownFallbackDefinition } from '../src/client/conversation-nodes/fallback.ts'
+import type { AssistantChatData } from '../src/client/contract/chat-nodes.ts'
 
 function logged(seq: number, type: string, data: unknown): ConversationEventInput {
   return {
