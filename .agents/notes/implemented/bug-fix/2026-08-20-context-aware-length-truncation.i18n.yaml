@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-20-context-aware-length-truncation.md
-2026-08-20-context-aware-length-truncation.md: 3d089d66b5bf8c6698394d75c0c56e1a1350cd5b
-2026-08-20-context-aware-length-truncation.zh.md: 82018216d8312539e549608661eab8977938499f
+2026-08-20-context-aware-length-truncation.md: f8f3b2b4dda420afe056b95a406accd6fd162ef2
+2026-08-20-context-aware-length-truncation.zh.md: e13badeb3171f170c2ee095448b7e3edabbca17a
