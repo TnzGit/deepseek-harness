@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import type { IncomingMessage } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { LOADER_SMOKE_TEST_TIMEOUT_MS, runLoaderSmoke } from '@deepseek-ai/dsh-loader-smoke'
 import { describe, expect, it } from 'vitest'
@@ -10,7 +11,7 @@ interface JsonObject {
 interface ScriptedDeepSeekServer {
   readonly url: string
   readonly requests: JsonObject[]
-  readonly headers: Record<string, string | string[] | undefined>[]
+  readonly headers: IncomingMessage['headers'][]
   close(): Promise<void>
 }
 
@@ -35,7 +36,7 @@ function wire(...events: unknown[]): string[] {
 
 async function lengthRecoveryServer(): Promise<ScriptedDeepSeekServer> {
   const requests: JsonObject[] = []
-  const headers: Record<string, string | string[] | undefined>[] = []
+  const headers: IncomingMessage['headers'][] = []
   const responses = [
     wire(
       {
