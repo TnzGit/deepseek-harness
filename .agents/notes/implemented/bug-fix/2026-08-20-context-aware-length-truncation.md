@@ -31,6 +31,8 @@ The configured model capacity is authoritative evidence for this decision. Deplo
 
 `packages/client/ui-conversation/tests/assistant-implicit-retry.client.spec.ts` verifies both sides of the streaming-attempt rule: a subsequent same-step stream replaces the superseded partial blocks, while a terminal attempt with no replacement remains visible as interrupted output.
 
+`examples/headless-agent/tests/length-compaction.snapshot.ts` boots the assembled headless application against a local DeepSeek-compatible SSE server and drives the full keyless path: one tool round, a partial `length` response whose usage reaches the configured 1,000,000-token window below the requested 256,000-token output cap, a 32-token compaction summary call, and a same-step replacement request. Its inline snapshot pins four provider calls with output budgets `[256000, 256000, 32, 256000]`, one compaction request, one context error, a logged but uncommitted partial response, the complete compaction lifecycle, and final output `LENGTH RECOVERED`.
+
 ## Alternatives considered
 
 **Classify every short `length` as context pressure.** Rejected because gateways can impose independent completion limits or otherwise terminate below the requested cap. Without evidence that combined usage reached the configured model window, automatically compacting history would destroy useful context for a condition compaction cannot repair.
