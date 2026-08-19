@@ -57,6 +57,9 @@ export type PreStepDecision =
 /** Action returned by a listener that owns model-request recovery. */
 export type RequestErrorAction = { kind: 'retry' } | undefined
 
+/** Action returned by a listener that changed the surface before dispatch. */
+export type RequestBudgetAction = { kind: 'retry' } | undefined
+
 /** Why a session lifecycle began; seeded creates are `startup`, while persisted loads are `resume`. */
 export type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact'
 
@@ -242,6 +245,23 @@ declare module '@deepseek-ai/cordis' {
      * @mode waterfall
     */
     'agent/request'(this: Scoped<Agent>, payload: { agent: Agent; turn: number; step: number; signal: AbortSignal }, next: () => Promise<LlmCallConfig>): Promise<LlmCallConfig>
+    /**
+     * Inspect the fully resolved request budget immediately before provider
+     * dispatch. A listener that durably changes the model-visible surface must
+     * return `{ kind: 'retry' }`; the loop then rebuilds the request from the
+     * new surface instead of sending the stale pre-change message snapshot.
+     * Calling `next()` delegates and the default `undefined` dispatches the
+     * already-built request unchanged.
+     * @param payload.agent - the agent about to dispatch the request.
+     * @param payload.turn - the open turn number.
+     * @param payload.step - the step whose request this is.
+     * @param payload.maxTokens - resolved output cap for the request, when one exists.
+     * @param payload.contextWindow - resolved combined request/response capacity, when known.
+     * @param payload.signal - the current turn's explicit abort signal.
+     * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.
+     * @mode waterfall
+     */
+    'agent/request-budget'(this: Scoped<Agent>, payload: { agent: Agent; turn: number; step: number; maxTokens: number | undefined; contextWindow: number | undefined; signal: AbortSignal }, next: () => Promise<RequestBudgetAction>): Promise<RequestBudgetAction>
     /**
      * Handle one failed model-request attempt before the loop retries or closes
      * its step. A listener returns `{ kind: 'retry' }` without calling `next()`
