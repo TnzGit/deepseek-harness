@@ -13,7 +13,6 @@ import type {
   CancelOptions,
   InboxTarget,
   PreStepDecision,
-  RequestBudgetAction,
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { Inbox, agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
@@ -341,19 +340,6 @@ export class ReactLoopAgent implements Agent {
       const { request, preparedCall } = await this.buildRequest(
         turn, step, assembly.tools, system, this.session.deriveMessages(), signal,
       )
-      const budgetAction = await this.dispatch.waterfall(
-        'agent/request-budget', {
-          turn,
-          step,
-          maxTokens: request.maxTokens,
-          contextWindow: preparedCall?.context?.contextWindow,
-          signal,
-        },
-        () => Promise.resolve<RequestBudgetAction>(undefined),
-      )
-      signal.throwIfAborted()
-      if (budgetAction?.kind === 'retry') continue
-
       const assembler = new BlockAssembler()
       const chunkSeqs: number[] = []
       try {
