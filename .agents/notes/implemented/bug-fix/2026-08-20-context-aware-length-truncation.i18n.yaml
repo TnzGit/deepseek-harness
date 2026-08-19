@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-20-context-aware-length-truncation.md
+2026-08-20-context-aware-length-truncation.md: 56a6239e48179667b331a55fc76bedce0d5747b9
+2026-08-20-context-aware-length-truncation.zh.md: ed96da66714bfe416a8baa06ca49d76d989f5b39

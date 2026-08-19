@@ -381,6 +381,12 @@ export class DeepSeekAdapter extends LlmAdapter {
       throw new LlmError('DeepSeek API returned no response body', 'EMPTY_RESPONSE')
     }
 
-    yield* translate(parseSse(response.body, onComment))
+    const configured = connection.models.find(entry => entry.id === options.model)
+    const contextWindow = configured?.contextWindow ?? connection.defaultContextWindow
+    const requestedMaxTokens = options.maxTokens
+    yield* translate(
+      parseSse(response.body, onComment),
+      requestedMaxTokens === undefined ? undefined : { contextWindow, requestedMaxTokens },
+    )
   }
 }
