@@ -120,6 +120,7 @@ export class BasicCompactionEngine extends CompactionEngine {
   readonly config: ResolvedConfig
 
   private readonly warnedPressureConfigTargets = new Set<string>()
+  private readonly budgetRetries = new WeakMap<Agent, number>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
   private readonly overflowAgents = new WeakMap<Session, Agent>()
 
@@ -130,9 +131,9 @@ export class BasicCompactionEngine extends CompactionEngine {
   }
 
   /**
-   * Register automatic between-step pressure and model-request overflow
-   * recovery. `compactIfNeeded` stays dynamically dispatched so subclass
-   * overrides are honored at event time.
+   * Register automatic between-step pressure, pre-dispatch output-headroom,
+   * and model-request overflow recovery. `compactIfNeeded` stays dynamically
+   * dispatched so subclass overrides are honored at event time.
    */
   private _registerAutomaticCompaction(): void {
     const { ctx } = this
@@ -165,15 +166,73 @@ export class BasicCompactionEngine extends CompactionEngine {
     })
 
     ctx.on('agent/status', ({ agent, status }) => {
-      if (status === 'idle') this.overflowRetries.delete(agent)
+      if (status === 'idle') {
+        this.budgetRetries.delete(agent)
+        this.overflowRetries.delete(agent)
+      }
     })
 
-    // A successful response starts a fresh overflow-recovery sequence even
-    // when tool calls continue the same turn into another request.
+    // A successful response starts fresh budget/overflow recovery sequences
+    // even when tool calls continue the same turn into another request.
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'assistant/message') return
       const agent = this.overflowAgents.get(session)
-      if (agent !== undefined) this.overflowRetries.delete(agent)
+      if (agent !== undefined) {
+        this.budgetRetries.delete(agent)
+        this.overflowRetries.delete(agent)
+      }
+    })
+
+    ctx.on('agent/request-budget', async (
+      { agent, maxTokens, contextWindow, signal },
+      next,
+    ) => {
+      if (signal.aborted
+        || maxTokens === undefined
+        || contextWindow === undefined
+        || maxTokens >= contextWindow) return next()
+      const targetPromptTokens = contextWindow - maxTokens
+      if (ctx.tokenMeter.measure(agent.session).totalTokens <= targetPromptTokens) return next()
+
+      this.overflowAgents.set(agent.session, agent)
+      const target = routedTarget(agent.session)
+      if (target === undefined) return next()
+      const policy = resolveTargetPolicy(this.config, target)
+      const retries = this.budgetRetries.get(agent) ?? 0
+      if (retries >= policy.maxOverflowRetries) return next()
+
+      const generation = agent.session.surface.replaceGeneration
+      let result: CompactionResult | null
+      try {
+        result = await this.compactIfNeeded(agent, 'request-budget', signal)
+      } catch (recoveryError: unknown) {
+        const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+        // Pruning or a successful earlier compaction attempt may already have
+        // changed the request surface. Never dispatch the stale request built
+        // before that progress: rebuild once from the replacement surface.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
+        if (!signal.aborted && agent.session.surface.replaceGeneration > generation) {
+          ctx.logger.warn(
+            `request-budget compaction failed after durable surface progress: ${message}; `
+            + 'rebuilding the request from the replacement surface',
+          )
+          this.budgetRetries.set(agent, retries + 1)
+          return { kind: 'retry' }
+        }
+        ctx.logger.warn(
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
+          `request-budget compaction failed: ${message}; ${signal.aborted
+            ? 'cancellation prevents dispatch'
+            : 'dispatching the unchanged request'}`,
+        )
+        return next()
+      }
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
+      if (signal.aborted
+        || agent.session.surface.replaceGeneration <= generation) return next()
+      if (result !== null) logResult(result, 'request output headroom')
+      this.budgetRetries.set(agent, retries + 1)
+      return { kind: 'retry' }
     })
 
     ctx.on('agent/request-error', async (
@@ -246,12 +305,14 @@ export class BasicCompactionEngine extends CompactionEngine {
   }
 
   /**
-   * Compact for replayed step-boundary pressure or one provider-confirmed context
-   * overflow. Both triggers price the latest durable routed request envelope;
-   * overflow bypasses the normal threshold and retained-tail policy so it can
-   * force one useful balanced reduction.
+   * Compact for replayed step-boundary pressure, resolved request-output
+   * headroom, or one provider-confirmed context overflow. All triggers price
+   * the latest durable routed request envelope; overflow bypasses the normal
+   * threshold and retained-tail policy so it can force one useful balanced
+   * reduction, while request-budget uses the exact `contextWindow - maxTokens`
+   * prompt target.
    * @param agent - agent whose latest durable routed request is measured.
-   * @param trigger - normal step-boundary pressure or context-overflow recovery.
+   * @param trigger - normal pressure, request-output headroom, or context-overflow recovery.
    * @param signal - live turn cancellation signal forwarded to summarization.
    * @returns the latest summary compaction result, or `null` when no summary ran.
    */
@@ -268,6 +329,8 @@ export class BasicCompactionEngine extends CompactionEngine {
     switch (trigger) {
       case 'context-overflow':
         break
+      case 'request-budget':
+        break
       case 'pressure':
         break
       /* v8 ignore next -- closed-union exhaustiveness guard */
@@ -276,8 +339,8 @@ export class BasicCompactionEngine extends CompactionEngine {
     }
 
     // Pruning is optional so compaction-basic remains independently composable.
-    // Overflow always qualifies; pressure first resolves the routed model's
-    // capacity and checks its target-specific threshold.
+    // Overflow always qualifies; pressure and request-budget first resolve the
+    // routed model capacity and their target-specific threshold.
     const prune = this.ctx.get('toolResultPruner')
 
     if (trigger === 'context-overflow') {
@@ -291,7 +354,12 @@ export class BasicCompactionEngine extends CompactionEngine {
     }
 
     const context = (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context
-    assertNoActiveCompaction(agent.session, 'automatic pressure compaction')
+    assertNoActiveCompaction(
+      agent.session,
+      trigger === 'request-budget'
+        ? 'automatic request-budget compaction'
+        : 'automatic pressure compaction',
+    )
     const targetKey = `${target.provider}/${target.model}`
     if (context === undefined) {
       throw new TargetPressureConfigError(
@@ -301,15 +369,26 @@ export class BasicCompactionEngine extends CompactionEngine {
       )
     }
     const spec = resolveCompactSpec(policy, context.contextWindow)
-    if (measurement.totalTokens < spec.thresholdTokens) return null
+    const requestedMaxTokens = trigger === 'request-budget'
+      ? agent.session.requestHeader()?.config.maxTokens
+      : undefined
+    if (trigger === 'request-budget'
+      && (requestedMaxTokens === undefined || requestedMaxTokens >= context.contextWindow)) return null
+    const thresholdTokens = trigger === 'request-budget'
+      ? context.contextWindow - requestedMaxTokens!
+      : spec.thresholdTokens
+    const belowTarget = (tokens: number): boolean => trigger === 'request-budget'
+      ? tokens <= thresholdTokens
+      : tokens < thresholdTokens
+    if (belowTarget(measurement.totalTokens)) return null
 
-    // Once pressure qualifies, land the model-free pass before choosing a
-    // summary range, then remeasure through the singleton replay fold.
+    // Once the selected trigger qualifies, land the model-free pass before
+    // choosing a summary range, then remeasure through the singleton replay fold.
     if (prune !== undefined) {
       prune.pruneSession(agent.session)
       measurement = meter.measure(agent.session)
     }
-    if (measurement.totalTokens < spec.thresholdTokens) return null
+    if (belowTarget(measurement.totalTokens)) return null
 
     let result: CompactionResult | null = null
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
@@ -322,12 +401,13 @@ export class BasicCompactionEngine extends CompactionEngine {
       }
       result = await this.compactRegion(range.start, range.end, agent, signal)
       measurement = meter.measure(agent.session)
-      if (measurement.totalTokens < spec.thresholdTokens) return result
+      if (belowTarget(measurement.totalTokens)) return result
     }
 
+    const label = trigger === 'request-budget' ? 'request-budget headroom' : 'threshold'
     throw new Error(
-      `compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts `
-      + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
+      `compaction still above ${label} after ${spec.compactionRetries + 1} compaction attempts `
+      + `(${measurement.totalTokens} estimated tokens >= target ${thresholdTokens})`,
     )
   }
 
