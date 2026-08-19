@@ -10,6 +10,8 @@
 
 import { CallId, EMPTY_RESPONSE_CODE, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { classifyLengthStop } from './length-stop.ts'
+import type { LengthStopBudget } from './length-stop.ts'
 import { DONE } from './sse.ts'
 import type { WireChunk, WireUsage } from './types.ts'
 
@@ -79,11 +81,15 @@ function closeBlock(block: OpenBlock): ContentBlock {
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * Malformed JSON payloads abort the stream with `MALFORMED_RESPONSE`.
  * @param payloads - SSE data payloads from {@link parseSse}, `[DONE]`-terminated.
+ * @param lengthBudget - exact request capacity used to disambiguate a terminal wire `length` after usage arrives.
  * @returns deltas as they arrive; `block-end`s, `usage`, and `finish` are all deferred to the `[DONE]` sentinel.
  *   A `stop` (or absent) finish with no opened blocks is a degenerate provider completion and maps to an
  *   `EMPTY_RESPONSE` error finish instead of a successful empty message.
  */
-export async function* translate(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk> {
+export async function* translate(
+  payloads: AsyncIterable<string>,
+  lengthBudget?: LengthStopBudget,
+): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
   let textBlock: OpenBlock | undefined
   let reasoningBlock: OpenBlock | undefined
@@ -104,7 +110,12 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
         yield { type: 'block-end', index: block.index, block: closeBlock(block) }
       }
       if (pendingUsage) yield { type: 'usage', usage: pendingUsage }
-      const reason = pendingFinish ?? { kind: 'stop' as const }
+      const rawReason = pendingFinish ?? { kind: 'stop' as const }
+      const reason = rawReason.kind === 'max-tokens'
+        && pendingUsage !== undefined
+        && lengthBudget !== undefined
+        ? classifyLengthStop(pendingUsage, lengthBudget)
+        : rawReason
       yield {
         type: 'finish',
         reason: reason.kind === 'stop' && order.length === 0
