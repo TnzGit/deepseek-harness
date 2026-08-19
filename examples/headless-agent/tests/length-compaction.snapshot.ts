@@ -17,13 +17,20 @@ interface ScriptedDeepSeekServer {
 const configPath = fileURLToPath(new URL('../length-compaction.cordis.snapshot.yml', import.meta.url))
 const binScript = fileURLToPath(new URL('./fixtures/headless-driver.ts', import.meta.url))
 const tsconfigPath = fileURLToPath(new URL('../../../tsconfig.json', import.meta.url))
-const toolArguments = JSON.stringify({
+
+function encode(value: unknown): string {
+  const encoded = JSON.stringify(value)
+  if (encoded === undefined) throw new Error('snapshot value is not JSON serializable')
+  return encoded
+}
+
+const toolArguments = encode({
   command: "printf 'length-recovery-marker\\n'",
   description: 'Emit length recovery marker',
 })
 
 function wire(...events: unknown[]): string[] {
-  return events.map(event => typeof event === 'string' ? event : JSON.stringify(event))
+  return events.map(event => typeof event === 'string' ? event : encode(event))
 }
 
 async function lengthRecoveryServer(): Promise<ScriptedDeepSeekServer> {
@@ -151,7 +158,7 @@ describe('direct DeepSeek context-clipped length recovery snapshot', () => {
       expect(result.stderr).toBe('')
       const records = parseJsonl(result.stdout)
       const events = sessionEvents(records)
-      const eventJson = events.map(event => JSON.stringify(event))
+      const eventJson = events.map(encode)
       const final = records.at(-1)
       const projection = {
         requests: server.requests.length,
@@ -163,7 +170,7 @@ describe('direct DeepSeek context-clipped length recovery snapshot', () => {
           .filter(type => type === 'compaction/start' || type === 'compaction/summary' || type === 'compaction/end'),
         partialLogged: eventJson.some(text => text.includes('SUPERSEDED PARTIAL')),
         partialCommitted: events.some(event => event.type === 'assistant/message'
-          && JSON.stringify(event).includes('SUPERSEDED PARTIAL')),
+          && encode(event).includes('SUPERSEDED PARTIAL')),
         finalOutput: final?.type === 'result' ? final.output : undefined,
       }
 
