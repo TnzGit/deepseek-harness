@@ -40,7 +40,12 @@ describe('context-aware length stops', () => {
 
   it('adds disjoint cache buckets when checking the combined window', () => {
     expect(classifyLengthStop(
-      { inputTokens: 1_000, cacheReadTokens: 128_000, outputTokens: 2_072 },
+      {
+        inputTokens: 1_000,
+        cacheReadTokens: 64_000,
+        cacheWriteTokens: 64_000,
+        outputTokens: 2_072,
+      },
       { contextWindow: 131_072, requestedMaxTokens: 16_384 },
     ).kind).toBe('error')
   })
@@ -57,6 +62,17 @@ describe('context-aware length stops', () => {
       { inputTokens: 10_000, outputTokens: 2_000 },
       { contextWindow: 131_072, requestedMaxTokens: 16_384 },
     )).toEqual({ kind: 'max-tokens' })
+  })
+
+  it('keeps length as max-tokens when usage exists but no capacity budget was supplied', async () => {
+    const chunks = await collect(translate(feed(
+      { choices: [{ delta: { content: 'partial' } }] },
+      { choices: [{ delta: {}, finish_reason: 'length' }] },
+      { choices: [], usage: { prompt_tokens: 129_000, completion_tokens: 2_072 } },
+      DONE,
+    )))
+
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'max-tokens' } })
   })
 
   it('uses trailing usage to reclassify length only at DONE', async () => {
