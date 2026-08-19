@@ -1,0 +1,31 @@
+# Keyless direct-DeepSeek length-clipping recovery composition.
+- id: base
+  name: '@deepseek-ai/cordis-plugin-include'
+  config:
+    path: ./cordis.yml
+    patches:
+      - id: llm-deepseek
+        config:
+          baseURL: !!js process.env.DSH_SNAPSHOT_BASE_URL
+          maxTokens: 256000
+          models:
+            - id: deepseek-v4-flash
+              contextWindow: 1000000
+              maxTokens: 256000
+      - id: compaction-basic
+        config:
+          thresholdRatio: 0.99
+          retainTokens: 20
+          maxTokens: 32
+      - id: agent-spine
+        config:
+          agents:
+            - id: main
+              provider: deepseek-official
+              model: deepseek-v4-flash
+              cwd: !!js process.cwd()
+          workspaceContext: false
+          persona: 'Keyless direct DeepSeek length-clipping recovery snapshot.'
+      - id: persistence
+        config:
+          root: './.sessions'
