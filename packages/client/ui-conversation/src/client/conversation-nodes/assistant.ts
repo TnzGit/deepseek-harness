@@ -34,6 +34,7 @@ interface AssistantState {
   readonly hidden: boolean
   readonly final: ConversationMatch | undefined
   readonly usage: unknown
+  readonly attemptFinished: boolean
 }
 
 function initialState(turn: number, step: number): AssistantState {
@@ -47,6 +48,7 @@ function initialState(turn: number, step: number): AssistantState {
     hidden: false,
     final: undefined,
     usage: undefined,
+    attemptFinished: false,
   }
 }
 
@@ -80,7 +82,10 @@ function resetForRetry(state: AssistantState): AssistantState {
 function updateChunk(state: AssistantState, match: ConversationMatch): AssistantState {
   if (match.event.type !== 'assistant/chunk') return state
   const chunk = match.event.data.chunk
-  const blocks = [...state.blocks]
+  const activeState = state.attemptFinished && chunk.type === 'block-start'
+    ? resetForRetry(state)
+    : state
+  const blocks = [...activeState.blocks]
   switch (chunk.type) {
     case 'block-start':
       blocks[chunk.index] = emptyAssistantBlock(chunk.blockType)
@@ -112,20 +117,22 @@ function updateChunk(state: AssistantState, match: ConversationMatch): Assistant
       blocks[chunk.index] = toAssistantBlock(chunk.block)
       break
     case 'usage':
-      return { ...state, usage: chunk.usage }
+      return { ...activeState, usage: chunk.usage }
+    case 'finish':
+      return { ...activeState, attemptFinished: true }
     default:
-      return state
+      return activeState
   }
   const visible = hasVisibleContent(compactBlocks(blocks))
   const firstToken = isTokenDelta(chunk)
   return {
-    ...state,
+    ...activeState,
     blocks,
-    hidden: visible ? false : state.hidden,
-    ...visible && state.firstVisibleSeq === undefined
+    hidden: visible ? false : activeState.hidden,
+    ...visible && activeState.firstVisibleSeq === undefined
       ? { firstVisibleSeq: match.event.seq, firstVisibleTime: match.event.time }
       : {},
-    ...firstToken && state.firstTokenTime === undefined
+    ...firstToken && activeState.firstTokenTime === undefined
       ? { firstTokenTime: match.event.time }
       : {},
   }

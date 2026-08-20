@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
@@ -174,5 +174,29 @@ describe('llm-deepseek real dynamic composition', () => {
     expect(ctx.get('credentials')).toBeUndefined()
     await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(server.headers[0]?.authorization).toBe('Bearer entry-key')
+  })
+
+  it('maps a context-clipped wire length stop into the existing overflow recovery code', async () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', 'entry-key')
+    const server = await mockServer([{
+      kind: 'sse',
+      events: [
+        '{"choices":[{"delta":{"content":"partial"}}]}',
+        '{"choices":[{"delta":{},"finish_reason":"length"}]}',
+        '{"choices":[],"usage":{"prompt_tokens":999000,"completion_tokens":1000}}',
+        '[DONE]',
+      ],
+    }])
+    const { ctx } = await loadComposition({ withDynamic: false, baseURL: server.url })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(result.finish).toEqual({
+      kind: 'error',
+      failure: {
+        message: 'model generation was clipped by the context window: requested up to 256000 output tokens, generated 1000, and provider usage reached 1000000/1000000 total tokens',
+        code: CONTEXT_WINDOW_EXCEEDED_CODE,
+      },
+    })
+    expect(server.requests[0]).toMatchObject({ max_tokens: 256_000 })
   })
 })
