@@ -28,8 +28,26 @@ import type { ProjectionsBaseline } from './projection-store.ts'
 import { resolvedClientTimeZone } from '../time-zone.ts'
 import { SessionQueueMirror } from './queue-mirror.ts'
 
-/** Messages requested per history page. */
+/** Messages requested per ordinary history page. */
 export const PAGE_MESSAGES = 50
+
+/** Mobile tail pages deliberately start tiny; older pages keep the ordinary page size. */
+const MOBILE_INITIAL_MESSAGES = 3
+/** Soft event ceiling for the mobile tail page; the Host may expand backward to preserve one complete group. */
+const MOBILE_INITIAL_EVENTS = 1500
+/** Conversation column breakpoint used by the browser shell for the compact mobile posture. */
+const MOBILE_HISTORY_MEDIA = '(max-width: 767px)'
+
+type HistoryRequest = { beforeSeq?: number; maxMessages?: number; maxEvents?: number }
+
+/** Tail-page request tuned for the viewport at the moment the session opens or repairs. */
+function tailHistoryRequest(): HistoryRequest {
+  const mobile = typeof globalThis.matchMedia === 'function'
+    && globalThis.matchMedia(MOBILE_HISTORY_MEDIA).matches
+  return mobile
+    ? { maxMessages: MOBILE_INITIAL_MESSAGES, maxEvents: MOBILE_INITIAL_EVENTS }
+    : { maxMessages: PAGE_MESSAGES }
+}
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {
@@ -620,7 +638,8 @@ export class Session implements SessionFace {
     this.openError = null
     this.notifier.markDirty()
     try {
-      let { result } = await this.history({ maxMessages: PAGE_MESSAGES })
+      const tailRequest = tailHistoryRequest()
+      let { result } = await this.history(tailRequest)
       if (generation !== this.openGeneration) return
       if (!result.ok) {
         this.openState = 'error'
@@ -631,7 +650,7 @@ export class Session implements SessionFace {
       // Gap detection: baseline past the window tail and liveBuffer did not cover it -> pull the tail page once more.
       const tailSeq = this.windowTailSeq()
       if (this.subscribedLastSeq !== null && tailSeq !== null && this.subscribedLastSeq > tailSeq) {
-        result = (await this.history({ maxMessages: PAGE_MESSAGES })).result
+        result = (await this.history(tailRequest)).result
         if (generation !== this.openGeneration) return
         if (result.ok) this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
       }
@@ -715,7 +734,7 @@ export class Session implements SessionFace {
     this.stitching = true
     const generation = this.openGeneration
     try {
-      const { result } = await this.history({ maxMessages: PAGE_MESSAGES })
+      const { result } = await this.history(tailHistoryRequest())
       // Failure or superseded by a full resync: drop — the resync path rebuilds and clears the buffer itself.
       if (result.ok && generation === this.openGeneration && this.openState === 'open') {
         this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
@@ -772,7 +791,7 @@ export class Session implements SessionFace {
   }
 
   /** Select ordinary or addressed history transport from the stored browser fact. */
-  private history(payload: { beforeSeq?: number; maxMessages?: number }): Promise<RpcResponse<{
+  private history(payload: HistoryRequest): Promise<RpcResponse<{
     events: HistoryEntry[]
     hasMore: boolean
     projections?: ProjectionsBaseline
