@@ -33,15 +33,15 @@ export const PAGE_MESSAGES = 50
 
 /** Mobile tail pages deliberately start tiny; older pages keep the ordinary page size. */
 const MOBILE_INITIAL_MESSAGES = 3
-/** Soft event ceiling for the mobile tail page; the Host may expand backward to preserve one complete group. */
+/** Soft event budget for a mobile tail page; complete message groups win over this budget. */
 const MOBILE_INITIAL_EVENTS = 1500
 /** Conversation column breakpoint used by the browser shell for the compact mobile posture. */
 const MOBILE_HISTORY_MEDIA = '(max-width: 767px)'
 
-type HistoryRequest = { beforeSeq?: number; maxMessages?: number; maxEvents?: number }
+type HistoryRequest = { beforeSeq?: number; maxMessages?: number }
 
-/** Tail-page request tuned for the viewport at the moment the session opens or repairs. */
-function tailHistoryRequest(): HistoryRequest {
+/** Viewport policy sampled when a tail page is opened or repaired. */
+function tailHistoryPolicy(): { maxMessages: number; maxEvents?: number } {
   const mobile = typeof globalThis.matchMedia === 'function'
     && globalThis.matchMedia(MOBILE_HISTORY_MEDIA).matches
   return mobile
@@ -631,6 +631,30 @@ export class Session implements SessionFace {
     this.pendingRev++
   }
 
+  /**
+   * Pull one tail page under the current viewport policy. Mobile starts at
+   * three complete message groups and steps down to two/one only when the
+   * returned raw event count exceeds the 1500-event budget. The Host's
+   * message-aligned paginator owns group integrity, so this never slices an
+   * event array locally; one intrinsically larger message is returned whole.
+   */
+  private async tailHistory(): Promise<RpcResponse<{
+    events: HistoryEntry[]
+    hasMore: boolean
+    projections?: ProjectionsBaseline
+  }>> {
+    const policy = tailHistoryPolicy()
+    let maxMessages = policy.maxMessages
+    while (true) {
+      const response = await this.history({ maxMessages })
+      if (policy.maxEvents === undefined
+        || !response.result.ok
+        || response.result.value.events.length <= policy.maxEvents
+        || maxMessages <= 1) return response
+      maxMessages -= 1
+    }
+  }
+
   /** @param generation - openGeneration at launch; every await re-checks it and a stale pass
    *  drops all writes (resync superseded this open — its outcome belongs to a dead connection). */
   private async doOpen(generation: number): Promise<void> {
@@ -638,8 +662,7 @@ export class Session implements SessionFace {
     this.openError = null
     this.notifier.markDirty()
     try {
-      const tailRequest = tailHistoryRequest()
-      let { result } = await this.history(tailRequest)
+      let { result } = await this.tailHistory()
       if (generation !== this.openGeneration) return
       if (!result.ok) {
         this.openState = 'error'
@@ -650,7 +673,7 @@ export class Session implements SessionFace {
       // Gap detection: baseline past the window tail and liveBuffer did not cover it -> pull the tail page once more.
       const tailSeq = this.windowTailSeq()
       if (this.subscribedLastSeq !== null && tailSeq !== null && this.subscribedLastSeq > tailSeq) {
-        result = (await this.history(tailRequest)).result
+        result = (await this.tailHistory()).result
         if (generation !== this.openGeneration) return
         if (result.ok) this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
       }
@@ -734,7 +757,7 @@ export class Session implements SessionFace {
     this.stitching = true
     const generation = this.openGeneration
     try {
-      const { result } = await this.history(tailHistoryRequest())
+      const { result } = await this.tailHistory()
       // Failure or superseded by a full resync: drop — the resync path rebuilds and clears the buffer itself.
       if (result.ok && generation === this.openGeneration && this.openState === 'open') {
         this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
