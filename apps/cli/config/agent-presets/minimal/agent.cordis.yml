@@ -1,10 +1,12 @@
-# The `minimal` agent preset: a fixed-prompt, two-tool coding-agent composition.
+# The `minimal` agent preset: a fixed-prompt coding-agent composition with
+# persistent shell, `str_replace_editor`, and isolated context compaction.
 #
 # The persona is the complete system prompt, so global identity, Web orientation,
 # tool guidance, and later assembly listeners cannot add prompt text. Runtime
-# context snapshots are suppressed for this preset, and the model composes only
-# the persistent shell (`bash` on POSIX, `pwsh` on win32) and
-# `str_replace_editor`. Context compaction is absent.
+# context snapshots are suppressed for this preset. The model composes only the
+# persistent shell (`bash` on POSIX, `pwsh` on win32) and `str_replace_editor`;
+# compaction is an agent-local maintenance capability and local `/compact`
+# command, not an additional model-facing tool.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
@@ -45,6 +47,9 @@
           * You do have access to a mirror of common linux and python packages via apt and pip.
           * State is persistent across command calls and discussions with the user.
           * To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.
+          * When `rtk` is available, prefer `rtk grep`, `rtk find`, `rtk read`, `rtk git`, `rtk test`, and `rtk log` for ordinary repository inspection with compact human-readable output.
+          * Use the native command instead when you need complete, exact, or machine-readable output, or when the RTK wrapper does not support the required operation.
+          * Never run `rtk init`, install RTK hooks, or otherwise modify Git/tool hooks. DSH uses RTK only as an explicit command wrapper so other agents such as Codex remain unaffected.
           * Please avoid commands that may produce a very large amount of output.
           * Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.
 
@@ -86,3 +91,27 @@
       name: '@deepseek-ai/dsh-tool-str-replace-editor'
       config:
         maxOutputChars: 16000
+
+# Minimal sessions retain the same automatic recovery primitive as standard
+# sessions without widening the model tool catalog. The compaction backend and
+# tool-result pruner share one agent-local realm because compaction-basic reads
+# toolResultPruner dynamically; tokenMeter stays on the host plane.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024

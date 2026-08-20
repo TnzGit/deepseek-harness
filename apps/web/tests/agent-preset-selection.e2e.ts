@@ -237,14 +237,14 @@ describe('web e2e: agent-preset selection', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-agent-preset-slash-catalog'))
     const composer = page.locator('textarea:enabled').last()
 
-    // `minimal` mounts neither the compaction group nor plan mode nor local
-    // skill discovery, so the catalog the composer warmed under the
-    // deployment default must not survive the switch.
+    // `minimal` now mounts compaction but still omits plan mode and local skill
+    // discovery, so the catalog the composer warmed under the deployment
+    // default must converge to that narrower composition after the switch.
     await composer.fill('/')
     await expect.poll(() => menuOptions(page), { timeout: 15_000 })
       .not.toEqual(expect.arrayContaining([expect.stringContaining(SKILL_NAME)]))
     const onMinimal = await menuOptions(page)
-    expect(onMinimal.some(option => option.startsWith('compact'))).toBe(false)
+    expect(onMinimal.some(option => option.startsWith('compact'))).toBe(true)
     expect(onMinimal.some(option => option.startsWith('plan'))).toBe(false)
     // The host-plane commands and the client's own contribution are the
     // floor: they belong to no preset and never move.
