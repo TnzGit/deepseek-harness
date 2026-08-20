@@ -78,9 +78,11 @@ export interface SubagentsApi {
    * Reads one healthy catalog child's transcript — the in-memory snapshot of
    * a live child, the persisted log of a cold one — with ordinary
    * message-aligned pagination and render intents, without Agent activation.
+   * `maxEvents` is a soft raw-event ceiling: the Host may return more events
+   * to keep the oldest included message or tool call complete.
    */
   history(
-    request: RpcRequest<SubagentAddress & { beforeSeq?: number; maxMessages?: number }>,
+    request: RpcRequest<SubagentAddress & { beforeSeq?: number; maxMessages?: number; maxEvents?: number }>,
     signal?: AbortSignal,
   ): Promise<RpcResponse<{
     events: HistoryEntry[]
