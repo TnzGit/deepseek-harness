@@ -61,7 +61,8 @@ export class SettingsScopeController<T> implements SettingsScope<T> {
    * @param api - settings wire face (writes only; reads ride the mirror).
    * @param spec - namespace identity and optional narrowing decoder.
    * @param mirror - the shared describe mirror this scope derives from.
-   * @param persistence - remote browsers remain process-local because settings RPCs are loopback-only.
+   * @param persistence - `host` delegates authorization to the Host; `memory`
+   * is reserved for an explicitly process-local mirror.
    * @param schema - settings-owned schema operations.
    */
   constructor(
@@ -115,7 +116,7 @@ export class SettingsScopeController<T> implements SettingsScope<T> {
    * Queue one field clear; see {@link SettingsScope.unset} for the ordering,
    * revision, and recovery contract.
    * @param field - scalar field inside the namespace section.
-   * @returns settlement after the clear and any latest-write recovery read.
+   * @returns settlement after the clear.
    */
   unset(field: string): Promise<void> {
     return this.write({ op: 'unset', path: [field] })
@@ -268,18 +269,22 @@ export class SettingsScopeBinder extends Service {
    * belongs to the calling fiber. The scope derives from the shared mirror
    * (whose invalidation subscriptions live with the providing plugin), so
    * binding adds no wire read of its own and activation never blocks on the
-   * settings transport.
+   * settings transport. Authorization is deliberately not inferred from the
+   * browser hostname: a Host-backed mirror lets the Host decide whether a
+   * trusted remote administrator is allowed; an explicitly memory-backed
+   * mirror remains process-local.
    * @param spec - domain-owned namespace contract.
    * @returns the bound scope consumed by the domain's services and rows.
    */
   bind<T>(spec: SettingsScopeSpec<T>): SettingsScope<T> {
     const ctx = this.ctx
     const connection = ctx.get('connection') as ConnectionHandle
+    const persistence = this.mirror.getSnapshot().status === 'unavailable' ? 'memory' : 'host'
     const controller = new SettingsScopeController<T>(
       connection.api,
       spec,
       this.mirror,
-      connection.isLoopback ? 'host' : 'memory',
+      persistence,
       this.schema,
     )
     ctx.effect(() => {
