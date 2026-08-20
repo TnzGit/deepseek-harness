@@ -268,9 +268,6 @@ export interface SessionsApi {
    * `maxMessages`, so a compaction's `compaction/summary` record stays on the page of its replacement. The tail
    * page (beforeSeq absent) additionally carries the in-flight
    * partial — chunk events already emitted for the last unfinalized message.
-   * `maxEvents` is a soft raw-event ceiling applied after the message quota:
-   * the Host expands the cut backward as needed to keep the oldest included
-   * finalized message and any included tool call/result pair complete.
    * Each entry pairs the raw SessionEvent with the host-computed view (tool events whose
    * presenter produced one, evaluated against the registry at pagination time); the client
    * rebuilds the surface from the events with the shared fold.
@@ -282,12 +279,7 @@ export interface SessionsApi {
    * Reading history uses an attached Session or persistence inspection and
    * never resumes or publishes an Agent.
    */
-  history(request: RpcRequest<{
-    sessionId: SessionId
-    beforeSeq?: number
-    maxMessages?: number
-    maxEvents?: number
-  }>):
+  history(request: RpcRequest<{ sessionId: SessionId; beforeSeq?: number; maxMessages?: number }>):
   Promise<RpcResponse<{ events: HistoryEntry[]; hasMore: boolean; projections?: SessionProjectionsBlock }>>
 
   /**

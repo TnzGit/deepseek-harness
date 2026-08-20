@@ -52,7 +52,6 @@ export const subagentHistoryRequestSchema = z.object({
   mode: z.union([z.literal('one-shot'), z.literal('continuable')]),
   beforeSeq: z.number().int().nonnegative().optional(),
   maxMessages: z.number().int().positive().optional(),
-  maxEvents: z.number().int().positive().optional(),
 }) satisfies z.ZodType<Wire<RequestPayload<'subagent.history'>>>
 
 /** subagent.history response value. */
