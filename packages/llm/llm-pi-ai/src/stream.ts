@@ -129,8 +129,23 @@ export async function* toStreamChunks(
   contextWindow?: number,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
-  // in stream order), but we track ids per index for tool calls.
+  // in stream order). Track both directions for tool calls: index→id/name
+  // powers deltas, while id→index rejects provider id reuse before a second
+  // tool-call start can enter the session log.
   const toolIds = new Map<number, { id: string; name: string }>()
+  const toolIndexesById = new Map<string, number>()
+
+  const recordToolId = (id: string, contentIndex: number): void => {
+    if (id.length === 0) return
+    const existingIndex = toolIndexesById.get(id)
+    if (existingIndex !== undefined && existingIndex !== contentIndex) {
+      throw new LlmError(
+        `provider reused tool call id "${id}" for content indexes ${existingIndex} and ${contentIndex}`,
+        'DUPLICATE_TOOL_CALL_ID',
+      )
+    }
+    toolIndexesById.set(id, contentIndex)
+  }
 
   for await (const event of events) {
     switch (event.type) {
@@ -155,10 +170,13 @@ export async function* toStreamChunks(
         yield { type: 'block-end', index: event.contentIndex, block: { type: 'reasoning', text: event.content } }
         break
       case 'toolcall_start': {
-        // The id/name live on the partial's content at this index.
+        // The id/name live on the partial's content at this index. Validate id
+        // reuse before yielding block-start so a malformed provider stream
+        // cannot create two durable tool-call starts with one correlation id.
         const partial = event.partial.content[event.contentIndex]
         const id = partial?.type === 'toolCall' ? partial.id : ''
         const name = partial?.type === 'toolCall' ? partial.name : ''
+        recordToolId(id, event.contentIndex)
         toolIds.set(event.contentIndex, { id, name })
         yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
         break
@@ -175,6 +193,10 @@ export async function* toStreamChunks(
         break
       }
       case 'toolcall_end':
+        // Defensive streams may omit the partial entry at start; the terminal
+        // event is then the first reliable id-bearing point. Re-check here so
+        // id reuse still fails before the final block enters assembly.
+        recordToolId(event.toolCall.id, event.contentIndex)
         yield {
           type: 'block-end',
           index: event.contentIndex,
