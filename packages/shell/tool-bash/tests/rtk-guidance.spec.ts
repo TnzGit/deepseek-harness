@@ -20,7 +20,7 @@ async function assembledBashGuidance(): Promise<string> {
     await ctx.plugin(ToolBash)
     const section = (await ctx.systemPrompt.assemble()).sections.find(candidate => candidate.name === 'tool:bash')
     if (section === undefined) throw new Error('tool:bash prompt section was not registered')
-    return section.content
+    return section.text
   } finally {
     await ctx.dispose()
   }
