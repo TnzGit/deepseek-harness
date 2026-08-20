@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-20-mobile-history-http-compression.md
+2026-08-20-mobile-history-http-compression.md: b1f34c7aebce57bd73d4290df325433d59ac3c8f
+2026-08-20-mobile-history-http-compression.zh.md: 05fda83c9647e5d63bf43ef7fab3a5b20b5f278a
