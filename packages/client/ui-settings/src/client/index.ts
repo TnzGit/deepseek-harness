@@ -42,6 +42,11 @@ export const inject = ['connection', 'remote']
  * mirror, and keep that mirror fresh on the two signals that can move the
  * settings document: a document commit and a (re)connect.
  *
+ * Authorization is Host-owned. A non-loopback browser still attempts the
+ * settings wire so an explicitly trusted LAN deployment can opt into remote
+ * administration; a Host that keeps the default loopback-only policy answers
+ * the refusal instead of the client manufacturing an `unavailable` state.
+ *
  * Constructing the service in this plugin's fiber keeps its traced methods
  * bound to each consuming plugin's context.
  * @param ctx - client root context.
@@ -49,10 +54,7 @@ export const inject = ['connection', 'remote']
 export function apply(ctx: ClientContext): void {
   const schema = new SettingsSchemaService(ctx)
   const connection = ctx.get('connection') as ConnectionHandle
-  const mirror = new SettingsDescribeMirror(
-    connection.api,
-    connection.isLoopback ? 'host' : 'memory',
-  )
+  const mirror = new SettingsDescribeMirror(connection.api)
   ctx.effect(() => {
     const disposers = [
       (ctx.get('remote') as ClientContext['remote']).$on('settings/document-updated', () => { void mirror.load() }),
