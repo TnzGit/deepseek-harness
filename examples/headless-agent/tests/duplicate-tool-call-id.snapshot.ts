@@ -58,7 +58,7 @@ describe('assembled duplicate tool call id snapshot', () => {
         },
       })
 
-      expect(result.stderr).toContain('DUPLICATE_TOOL_CALL_ID')
+      expect(result.stderr).toContain('provider reused tool call id "dup-call"')
       const events = parseJsonl(result.stdout)
         .filter(record => record.type === 'session_event')
         .map(record => record.event as JsonObject)
