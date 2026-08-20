@@ -1,4 +1,4 @@
-/** Browser-safe UUID generation for client-side wire correlation. */
+/** Browser-safe UUID generation for client-side correlation and ephemeral ids. */
 
 /**
  * Generate an RFC 4122 version 4 UUID without requiring a secure context.
