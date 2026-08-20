@@ -47,6 +47,9 @@
           * You do have access to a mirror of common linux and python packages via apt and pip.
           * State is persistent across command calls and discussions with the user.
           * To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.
+          * When `rtk` is available, prefer `rtk grep`, `rtk find`, `rtk read`, `rtk git`, `rtk test`, and `rtk log` for ordinary repository inspection with compact human-readable output.
+          * Use the native command instead when you need complete, exact, or machine-readable output, or when the RTK wrapper does not support the required operation.
+          * Never run `rtk init`, install RTK hooks, or otherwise modify Git/tool hooks. DSH uses RTK only as an explicit command wrapper so other agents such as Codex remain unaffected.
           * Please avoid commands that may produce a very large amount of output.
           * Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.
 
