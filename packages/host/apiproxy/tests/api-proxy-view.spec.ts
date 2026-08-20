@@ -324,6 +324,68 @@ describe('mux live view computation', () => {
     }
   })
 
+  it('keeps one assistant tool-call message, its stream provenance, and tool result on the same history page', async () => {
+    const { ctx } = await harness()
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const session = ctx.sessions.create()
+    ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
+    session.append('turn/start', { turn: 1 })
+    const older = appendUserText(session, 'older prompt')
+    const callId = CallId('history-safe-tool')
+    const chunks = [
+      session.append('assistant/chunk', {
+        turn: 1, step: 1,
+        chunk: { type: 'block-start', index: 0, blockType: 'tool-call' },
+      }).seq,
+      session.append('assistant/chunk', {
+        turn: 1, step: 1,
+        chunk: { type: 'tool-call-delta', index: 0, id: callId, name: 'term', argumentsDelta: '{"cmd":"pwd"}' },
+      }).seq,
+      session.append('assistant/chunk', {
+        turn: 1, step: 1,
+        chunk: {
+          type: 'block-end',
+          index: 0,
+          block: { type: 'tool-call', id: callId, name: 'term', arguments: '{"cmd":"pwd"}' },
+        },
+      }).seq,
+      session.append('assistant/chunk', {
+        turn: 1, step: 1,
+        chunk: { type: 'finish', reason: { kind: 'tool-calls' } },
+      }).seq,
+    ]
+    const message = session.append('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: callId, name: 'term', arguments: '{"cmd":"pwd"}' }],
+        source: { kind: 'model', provider: 'p', model: 'm' },
+      }),
+    }, { surfaceOp: 'append', sourceEventSeqs: chunks })
+    const call = session.append('tool/call', {
+      turn: 1, step: 1, callId, name: 'term', arguments: '{"cmd":"pwd"}',
+    })
+    const result = session.append('tool/result', {
+      turn: 1, step: 1,
+      message: createToolResultMessage({
+        callId,
+        content: [{ type: 'text', text: '/tmp' }],
+        isError: false,
+      }),
+    }, { surfaceOp: 'append' })
+
+    const response = await api.sessions.history({
+      rpcId: RpcId('t-hist-whole-tool'),
+      payload: { sessionId: session.id, maxMessages: 1 },
+    })
+    if (!response.result.ok) throw new Error('unreachable')
+    const seqs = response.result.value.events.map(entry => entry.event.seq)
+    expect(seqs).toEqual([...chunks, message.seq, call.seq, result.seq])
+    expect(seqs).not.toContain(older.seq)
+    expect(response.result.value.hasMore).toBe(true)
+  })
+
   it('drops a disposed session from the live open-call table (result after dispose gets no view)', async () => {
     const { ctx } = await harness()
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
