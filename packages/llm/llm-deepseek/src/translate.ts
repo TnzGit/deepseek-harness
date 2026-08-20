@@ -94,6 +94,7 @@ export async function* translate(
   let textBlock: OpenBlock | undefined
   let reasoningBlock: OpenBlock | undefined
   const toolBlocks = new Map<number, OpenBlock>()
+  const toolIndexesById = new Map<string, number>()
   const order: OpenBlock[] = []
   let pendingFinish: FinishReason | undefined
   let pendingUsage: TokenUsage | undefined
@@ -161,6 +162,17 @@ export async function* translate(
       }
 
       for (const call of delta?.tool_calls ?? []) {
+        if (call.id !== undefined) {
+          const existingIndex = toolIndexesById.get(call.id)
+          if (existingIndex !== undefined && existingIndex !== call.index) {
+            throw new LlmError(
+              `provider reused tool call id "${call.id}" for indexes ${existingIndex} and ${call.index}`,
+              'DUPLICATE_TOOL_CALL_ID',
+            )
+          }
+          toolIndexesById.set(call.id, call.index)
+        }
+
         let block = toolBlocks.get(call.index)
         if (!block) {
           block = open('tool-call')
