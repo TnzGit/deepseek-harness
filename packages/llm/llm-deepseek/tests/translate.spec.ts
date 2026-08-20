@@ -147,6 +147,43 @@ describe('translate: tool calls', () => {
     ])
   })
 
+  it('rejects one tool call id reused by a different wire index before the second start', async () => {
+    const chunks: StreamChunk[] = []
+    let failure: unknown
+    try {
+      for await (const chunk of translate(feed(
+        firstChunk,
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'dup', type: 'function', function: { name: 'one', arguments: '{}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 1, id: 'dup', type: 'function', function: { name: 'two', arguments: '{}' } }] } }] },
+        DONE,
+      ))) chunks.push(chunk)
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toMatchObject({ code: 'DUPLICATE_TOOL_CALL_ID' })
+    expect(chunks.filter(chunk => chunk.type === 'block-start')).toEqual([
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+    ])
+  })
+
+  it('allows repeated id-bearing fragments for the same wire index', async () => {
+    const chunks = await collect(translate(feed(
+      firstChunk,
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'same', type: 'function', function: { name: 'f', arguments: '{"a"' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'same', type: 'function', function: { arguments: ':1}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      DONE,
+    )))
+
+    expect(chunks.filter(chunk => chunk.type === 'block-start')).toHaveLength(1)
+    expect(chunks.find(chunk => chunk.type === 'block-end')).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: { type: 'tool-call', id: 'same', name: 'f', arguments: '{"a":1}' },
+    })
+  })
+
   it('interleaves text and tool-call blocks with distinct indices', async () => {
     const chunks = await collect(translate(feed(
       firstChunk,
