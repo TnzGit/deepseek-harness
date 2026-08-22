@@ -19,6 +19,10 @@ export type PluginsSettingsLocaleKey =
   | 'hooksNotifyMessage' | 'hooksNotifyMessageHint'
   | 'hooksNotifySound' | 'hooksNotifySoundHint'
   | 'hooksNotifyRepeat' | 'hooksNotifyRepeatHint'
+  | 'sessionNamingTitle' | 'sessionNamingDescription'
+  | 'sessionNamingMode' | 'sessionNamingModeHint'
+  | 'namingModeFirst' | 'namingModeEveryNth'
+  | 'sessionNamingEveryN' | 'sessionNamingEveryNHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -78,6 +82,14 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   hooksNotifySoundHint: 'Device sound name; leave blank to restore the default (Glass).',
   hooksNotifyRepeat: 'Repeat count',
   hooksNotifyRepeatHint: 'How many times one notification repeats its sound.',
+  sessionNamingTitle: 'Session naming',
+  sessionNamingDescription: 'How AI generates and refreshes session titles.',
+  sessionNamingMode: 'Update cadence',
+  sessionNamingModeHint: 'First prompt only names once after the opening prompt. Every N prompts regenerates after each further batch of N; a manual rename stops automatic updates.',
+  namingModeFirst: 'First prompt only',
+  namingModeEveryNth: 'Every N prompts',
+  sessionNamingEveryN: 'N (prompts)',
+  sessionNamingEveryNHint: 'Prompts between automatic renames.',
 }
 
 /** Simplified Chinese copy. */
@@ -138,4 +150,12 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   hooksNotifySoundHint: '设备端音效名称；留空恢复默认（Glass）。',
   hooksNotifyRepeat: '重复次数',
   hooksNotifyRepeatHint: '同一条提醒重复播放的次数。',
+  sessionNamingTitle: '会话命名',
+  sessionNamingDescription: 'AI 生成和更新会话标题的方式。',
+  sessionNamingMode: '更新时机',
+  sessionNamingModeHint: '仅首次：第一条提示词后命名一次。每 N 条：此后每新增 N 条提示词重新命名；手动改名后自动更新停止。',
+  namingModeFirst: '仅首次',
+  namingModeEveryNth: '每 N 条提示词',
+  sessionNamingEveryN: 'N（条）',
+  sessionNamingEveryNHint: '两次自动重新命名之间的提示词数。',
 }

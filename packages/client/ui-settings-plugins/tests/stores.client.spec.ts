@@ -15,6 +15,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-mirror.ts'
 import { ConfigurablePluginsTabController } from '../src/client/tab-store.ts'
 import { NotifyCardController, type HooksNotifySettings } from '../src/client/notify-card-controller.ts'
+import { SessionTitleCardController, type SessionTitleSettings } from '../src/client/session-title-card-controller.ts'
 import { WebSearchCardController, type WebSearchSettings } from '../src/client/web-search-card-controller.ts'
 
 /** Make the stub behave like a Host that accepts every write. */
@@ -430,6 +431,45 @@ describe('NotifyCardController', () => {
     await vi.waitFor(() => { expect(face.hooks.hooksNotifyCard.getSnapshot().dirty).toBe(false) })
 
     expect(host.set.mock.calls).toEqual([['message', '第 {{turn}} 轮完成'], ['repeat', 3]])
+  })
+})
+
+describe('SessionTitleCardController', () => {
+  const section = {
+    mode: 'first',
+    everyNPrompts: 3,
+  }
+
+  function controller() {
+    const host = stubSettingsScope<SessionTitleSettings>()
+    const subject = new SessionTitleCardController(host.scope)
+    host.publish({ status: 'ready', writable: true, value: { ...section }, base: { ...section }, user: {} })
+    return { host, subject }
+  }
+
+  it('projects the cadence fields the card renders', () => {
+    const { subject } = controller()
+
+    expect(subject.inject().hooks.sessionTitleCard.getSnapshot()).toMatchObject({
+      available: true,
+      writable: true,
+      dirty: false,
+      mode: { text: 'first' },
+      everyNPrompts: { text: '3' },
+    })
+  })
+
+  it('saves staged cadence edits through the settings scope', async () => {
+    const { host, subject } = controller()
+    acceptWrites(host)
+    const face = subject.inject()
+
+    face.edit('mode', 'every-nth')
+    face.edit('everyNPrompts', '5')
+    face.save()
+    await vi.waitFor(() => { expect(face.hooks.sessionTitleCard.getSnapshot().dirty).toBe(false) })
+
+    expect(host.set.mock.calls).toEqual([['mode', 'every-nth'], ['everyNPrompts', 5]])
   })
 })
 

@@ -8,6 +8,9 @@
     { "path": "../../../vendor/schemastery" },
     { "path": "../../runtime-diagnostics/invariants" },
     { "path": "../../llm/llm" },
+    { "path": "../../core/session" },
+    { "path": "../../settings/settings" },
+    { "path": "../../settings/settings-file" },
     { "path": "../session-title" },
     { "path": "../session-title-llm" }
   ]

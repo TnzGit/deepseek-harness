@@ -17,6 +17,8 @@ import { ConfigurablePluginsTab } from '../src/client/ConfigurablePluginsTab.tsx
 import type { ConfigurablePluginsTabProps } from '../src/client/ConfigurablePluginsTab.tsx'
 import { NotifyCard } from '../src/client/NotifyCard.tsx'
 import type { NotifyCardProps } from '../src/client/NotifyCard.tsx'
+import { SessionTitleCard } from '../src/client/SessionTitleCard.tsx'
+import type { SessionTitleCardProps } from '../src/client/SessionTitleCard.tsx'
 import { PluginsSettingsSection } from '../src/client/PluginsSettingsSection.tsx'
 import type { PluginsSettingsSectionProps, PluginsSettingsTabEntry } from '../src/client/PluginsSettingsSection.tsx'
 import { WebSearchCard } from '../src/client/WebSearchCard.tsx'
@@ -25,6 +27,7 @@ import type { AgentLoopCardState } from '../src/client/agent-loop-card-controlle
 import type { BashCardState } from '../src/client/bash-card-controller.ts'
 import type { CardFieldState, CardShell } from '../src/client/card-form.ts'
 import type { NotifyCardState } from '../src/client/notify-card-controller.ts'
+import type { SessionTitleCardState } from '../src/client/session-title-card-controller.ts'
 import type { ConfigurablePluginsTabState } from '../src/client/tab-store.ts'
 import type { WebSearchCardState } from '../src/client/web-search-card-controller.ts'
 import { en } from '../src/client/locales.ts'
@@ -496,5 +499,55 @@ describe('NotifyCard', () => {
     ]) {
       expect(screen.getByLabelText(label)).toHaveProperty('disabled', true)
     }
+  })
+})
+
+describe('SessionTitleCard', () => {
+  function renderTitleCard(state: Partial<SessionTitleCardState> = {}) {
+    const store = createSnapshotStore<SessionTitleCardState>({
+      ...settled,
+      mode: field('first'),
+      everyNPrompts: field('3'),
+      ...state,
+    })
+    const actions = cardActions()
+    const props = { ...actions, t, useSessionTitleCard: bindSnapshotSelector(store) } as unknown as SessionTitleCardProps
+    render(<SessionTitleCard {...props} />)
+    return actions
+  }
+
+  it('renders nothing while its namespace is unavailable', () => {
+    const { container } = render(<div />)
+    renderTitleCard({ available: false })
+
+    expect(container.textContent).toBe('')
+    expect(screen.queryByText(en.sessionNamingTitle)).toBeNull()
+  })
+
+  it('reveals the cadence selection and its interval once expanded', () => {
+    renderTitleCard()
+    expect(screen.getByText(en.sessionNamingTitle)).toBeTruthy()
+
+    fireEvent.click(screen.getByText(en.sessionNamingTitle))
+
+    expect(screen.getByLabelText(en.sessionNamingMode)).toBeTruthy()
+    expect(screen.getByLabelText(en.sessionNamingEveryN)).toBeTruthy()
+    expect(screen.getByRole('option', { name: en.namingModeFirst })).toBeTruthy()
+    expect(screen.getByRole('option', { name: en.namingModeEveryNth })).toBeTruthy()
+  })
+
+  it('stages cadence edits and saves through the injected actions', () => {
+    const actions = renderTitleCard({ dirty: true })
+    fireEvent.click(screen.getByText(en.sessionNamingTitle))
+
+    fireEvent.change(screen.getByLabelText(en.sessionNamingMode), { target: { value: 'every-nth' } })
+    fireEvent.change(screen.getByLabelText(en.sessionNamingEveryN), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: en.save }))
+
+    expect(actions.edit.mock.calls).toEqual([
+      ['mode', 'every-nth'],
+      ['everyNPrompts', '5'],
+    ])
+    expect(actions.save).toHaveBeenCalledOnce()
   })
 })

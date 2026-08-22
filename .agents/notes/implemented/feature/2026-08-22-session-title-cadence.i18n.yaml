@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-22-session-title-cadence.md
+2026-08-22-session-title-cadence.md: b10e46767c3e1b9380220d45c704f2a030c58fe5
+2026-08-22-session-title-cadence.zh.md: 8d7058bf66b8466c21279f946f1761202cc0391f

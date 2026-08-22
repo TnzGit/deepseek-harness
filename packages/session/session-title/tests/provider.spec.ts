@@ -371,4 +371,85 @@ describe('SessionTitleService Provider lifecycle', () => {
     await expect(ctx.sessionTitle.refresh(session)).rejects.toThrow('title backend failed')
     warn.mockRestore()
   })
+
+  it('titles on the first prompt and regenerates only at each interval boundary', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const requests: SessionTitleProviderRequest[] = []
+    ctx.sessionTitle.register({
+      id: SessionTitleProviderId('interval-model'),
+      automatic: 'every-nth-prompt',
+      promptInterval: 2,
+      async generate(request) {
+        requests.push(request)
+        return {
+          title: `Interval title ${String(request.messages.length)}`,
+          messageSeqs: request.messages.map(message => message.seq),
+        }
+      },
+    })
+    const session = ctx.sessions.create(SessionId('interval-provider'))
+    session.append('turn/start', {
+      turn: 1,
+    })
+
+    // Prompt 1 schedules immediately.
+    const first = appendHumanPrompt(session, 'First interval prompt')
+    await settle()
+    appendRoute(session)
+    await settle()
+    expect(requests).toHaveLength(1)
+    expect(ctx.sessionTitle.get(session)).toMatchObject({
+      title: 'Interval title 1',
+      source: { kind: 'provider', provider: SessionTitleProviderId('interval-model') },
+    })
+
+    // Prompt 2 sits inside the interval: no new revision, and the appended
+    // route must not start pending work either.
+    const second = appendHumanPrompt(session, 'Second interval prompt')
+    await settle()
+    appendRoute(session, 'change')
+    await settle()
+    expect(requests).toHaveLength(1)
+
+    // Prompt 3 reaches the boundary: the revision covers every message so far.
+    const third = appendHumanPrompt(session, 'Third interval prompt')
+    await settle()
+    appendRoute(session, 'change')
+    await settle()
+    expect(requests).toHaveLength(2)
+    expect(requests[1]?.messages.map(message => message.seq)).toEqual([
+      first.seq,
+      second.seq,
+      third.seq,
+    ])
+    expect(ctx.sessionTitle.get(session)?.title).toBe('Interval title 3')
+
+    // Prompt 4 waits for the next boundary.
+    appendHumanPrompt(session, 'Fourth interval prompt')
+    await settle()
+    appendRoute(session, 'change')
+    await settle()
+    expect(requests).toHaveLength(2)
+  })
+
+  it('rejects an every-nth provider whose interval is missing or not a positive integer', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+
+    expect(() => ctx.sessionTitle.register({
+      id: SessionTitleProviderId('interval-missing'),
+      automatic: 'every-nth-prompt',
+      async generate() { return { title: 'unused', messageSeqs: [] } },
+    })).toThrow('promptInterval')
+
+    expect(() => ctx.sessionTitle.register({
+      id: SessionTitleProviderId('interval-zero'),
+      automatic: 'every-nth-prompt',
+      promptInterval: 0,
+      async generate() { return { title: 'unused', messageSeqs: [] } },
+    })).toThrow('promptInterval')
+  })
 })
