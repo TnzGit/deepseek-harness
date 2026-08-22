@@ -53,6 +53,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Whether this launch explicitly permits trusted LAN clients to use remote admin APIs. */
+  allowRemoteAdmin?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -60,6 +62,7 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  allowRemoteAdmin: z.boolean().default(false),
 })
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
@@ -68,6 +71,8 @@ export interface WebRuntimeValues {
   lanAddresses: string[]
   /** LAN literals followed by explicit invocation authorities. */
   trustedHosts: string[]
+  /** Whether the connection fence may admit remote admin methods from trusted LAN clients. */
+  allowRemoteAdmin?: boolean
 }
 
 /** Environment variable naming the canonical local URL of this Web GUI. */
@@ -224,7 +229,10 @@ export const internals: {
  * @param config - validated {@link Config}.
  */
 export function apply(ctx: Context, config: Config): void {
-  const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const runtime: WebRuntimeValues = {
+    ...resolveLanTrust(ctx.webServer.host, config.trustedHosts),
+    allowRemoteAdmin: config.allowRemoteAdmin === true,
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(ctx)
