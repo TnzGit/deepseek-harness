@@ -8,7 +8,7 @@
  * @module dsh-llm-deepseek/adapter
  */
 
-import { attributionHeaders, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { adaptMaxTokensForContextOverflow, attributionHeaders, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -548,13 +548,23 @@ export class DeepSeekAdapter extends LlmAdapter {
       : await prepareRequestImages(requestOptions, attachments, model, signal)
     let representation: 'file' | 'base64' = 'file'
     let fileAttempt = 0
+    // One adaptive retry per request: a context-overflow rejection whose text
+    // names the window and prompt sizes lets the output cap shrink to fit.
+    let effectiveMaxTokens: number | undefined = options.maxTokens
+    let adaptedOnce = false
     while (true) {
       const usedFiles: UsedRequestFile[] = []
+      const effectiveOptions = effectiveMaxTokens === options.maxTokens
+        ? requestOptions
+        : {
+          ...requestOptions,
+          ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
+        }
       let body: WireRequest
       if (attachments === undefined) {
-        body = serializeRequest(requestOptions, connection.defaults)
+        body = serializeRequest(effectiveOptions, connection.defaults)
       } else if (representation === 'base64') {
-        body = await serializeRequestWithImages(requestOptions, {
+        body = await serializeRequestWithImages(effectiveOptions, {
           representation: { kind: 'base64' },
           requestImages,
           maxRequestImageBytes: connection.maxInlineRequestImageBytes,
@@ -564,7 +574,7 @@ export class DeepSeekAdapter extends LlmAdapter {
         }, connection.defaults)
       } else {
         try {
-          body = await serializeRequestWithImages(requestOptions, {
+          body = await serializeRequestWithImages(effectiveOptions, {
             representation: {
               kind: 'file',
               resolveFileId: async (version, _block, location) => {
@@ -602,7 +612,7 @@ export class DeepSeekAdapter extends LlmAdapter {
 
       const configured = connection.models.find(entry => entry.id === options.model)
       const contextWindow = configured?.contextWindow ?? connection.defaultContextWindow
-      const requestedMaxTokens = options.maxTokens
+      const requestedMaxTokens = effectiveMaxTokens
       // TODO(http): adopt the Cordis HTTP service when shared transport configuration
       // outweighs its additional runtime dependencies.
       let response: Response
@@ -649,9 +659,21 @@ export class DeepSeekAdapter extends LlmAdapter {
         if (response.status === 400 && usedFiles.length > 0 && providerRejectedNormalizedImage(detail)) {
           message = normalizedImageDiagnostic(usedFiles, message, detail)
         }
+        const errorCode = httpErrorCode(response.status, providerError)
+        if (!adaptedOnce && errorCode === CONTEXT_WINDOW_EXCEEDED_CODE) {
+          const adapted = adaptMaxTokensForContextOverflow(
+            detail.length > 0 ? detail : rawResponse,
+            effectiveMaxTokens,
+          )
+          if (adapted !== undefined) {
+            adaptedOnce = true
+            effectiveMaxTokens = adapted
+            continue
+          }
+        }
         const delay = providerRetryAfterMs(response.headers.get('retry-after'))
         const id = requestId(response.headers)
-        throw new LlmError(message, httpErrorCode(response.status, providerError), {
+        throw new LlmError(message, errorCode, {
           cause: new Error(rawResponse.length > 0 ? rawResponse : `DeepSeek HTTP ${response.status}`),
           status: response.status,
           ...delay === undefined ? {} : { providerRetryAfterMs: delay },

@@ -1,0 +1,35 @@
+# Agent Note：上下文窗口拒绝的自适应输出上限重试
+
+状态：已实现
+
+[English](2026-08-22-context-adapt-retry.md) | 中文
+
+## 问题
+
+一次请求可能不是因为对话本身、而是因为申请的补全预留撞上提供方的上下文窗口检查：95233 提示词 token 加 32768 输出上限，对 128000 的窗口只溢出 1 个 token。`CONTEXT_WINDOW_EXCEEDED` 的既有恢复手段是压缩（[compaction-basic 的溢出路径](../../../packages/compaction/compaction-basic/README.md)）——对这种形态是杀鸡用牛刀，慢，而且当压缩压得不够或重试耗尽时依旧硬失败。
+
+## 决策
+
+两条 LLM 适配器栈（DeepSeek fetch 管线与 pi-ai 事件流）都在各自的溢出归类点拦截：当拒绝文本写明窗口大小与提示词 token 数（vLLM/OpenAI 兼容措辞）时，以 `limit − input − 512` 钳制后的输出上限立即重试一次：
+
+- **每次请求至多自适配一次**（`adaptedOnce`）——第二次溢出原样交给既有的压缩恢复。
+- **有用性下限**：钳制结果低于 2048 输出 token 时放弃，拒绝原样抛出。
+- **未显式设置上限也参与自适配**：提供方预留了自己的默认值，钳制值直接替换它。
+- **length 判定保持真实**：DeepSeek 适配器的 length-stop 预算改用适配后的上限，因为那才是重试请求实际携带的值。
+
+共享的解析与决策放在 `dsh-llm`（`parseContextOverflowNumbers`、`adaptMaxTokensForContextOverflow`）；各适配器只拥有自己的拦截点——DeepSeek 请求循环重建载荷，pi-ai 生成器经每次尝试各自的 watchdog/finally 拆掉失败尝试，再以全新控制器重启。
+
+## 备选方案
+
+- **依据配置窗口减输入估算做预防性预钳制。** 暂缓：需要可信的预检 token 估算；而提供方自己的拒绝文本免费给出精确数字。
+- **在 compaction-basic 的重试瀑布里做适配。** 否决：那一 seam 能编排重试却无法重塑失败请求的选项；上限属于适配器派发层。
+
+## 测试
+
+- `dsh-llm`：数字抽取（vLLM 措辞、缺数字）与钳制决策（放行、无上限、已放得下、窗口拥挤、无法解析）。
+- DeepSeek：脚本化的 400-再-成功交互固定两次线上请求体（`max_tokens` 32768 → 32255），窗口拥挤用例恰好一次请求后抛出 `CONTEXT_WINDOW_EXCEEDED`。
+- pi-ai：经真实 OpenAI-completions 客户端对本地 mock 服务器的同一交互，断言第二次请求上按该路由的 compat 键携带适配后的上限。
+
+## 后果
+
+自适配是刻意无声的：成功的重试与任何其他响应无异，被拒绝的退化行为与引入压缩之前完全一致。边距与下限是固定的安全常量，不是配置项。

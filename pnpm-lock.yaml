@@ -6661,6 +6661,12 @@ importers:
       '@deepseek-ai/dsh-session-title-llm':
         specifier: workspace:^
         version: link:../session-title-llm
+      '@deepseek-ai/dsh-settings':
+        specifier: workspace:^
+        version: link:../../settings/settings
+      '@deepseek-ai/dsh-settings-file':
+        specifier: workspace:^
+        version: link:../../settings/settings-file
 
   packages/session/session-title-llm:
     dependencies:

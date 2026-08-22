@@ -587,6 +587,53 @@ describe('DeepSeekAdapter against a mock server', () => {
     })
   })
 
+  it('adapts the output cap once when a 400 overflow names the window numbers', async () => {
+    const raw = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
+      + ' Please reduce the length of the input prompt or the number of requested output tokens.'
+      + ' (parameter=input_tokens, value=95233)' } })
+    const server = await mockServer([
+      { kind: 'http-error', status: 400, body: raw },
+      { kind: 'sse', events: textEvents },
+    ])
+    const adapter = adapterOf({ baseURL: server.url })
+
+    await drain(adapter.stream({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    }))
+
+    expect(server.requests).toHaveLength(2)
+    expect((server.requests[0] as { max_tokens?: number }).max_tokens).toBe(32_768)
+    // 128000 − 95233 − 512 margin = 32255.
+    expect((server.requests[1] as { max_tokens?: number }).max_tokens).toBe(32_255)
+  })
+
+  it('surfaces the overflow when the remaining window funds no useful completion', async () => {
+    const raw = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 126000 input tokens, for a total of at least 158768 tokens.' } })
+    const server = await mockServer([{ kind: 'http-error', status: 400, body: raw }])
+    const adapter = adapterOf({ baseURL: server.url })
+
+    await expect(drain(adapter.stream({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    }))).rejects.toMatchObject({ code: 'CONTEXT_WINDOW_EXCEEDED' })
+    expect(server.requests).toHaveLength(1)
+  })
+
   it('lists every candidate when a normalized multi-image rejection names no file id', async () => {
     const secondRef: ImageAttachmentRef = {
       ...imageRef,

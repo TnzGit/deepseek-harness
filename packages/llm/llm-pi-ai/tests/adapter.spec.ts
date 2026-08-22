@@ -61,6 +61,43 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
+  it('adapts the output cap once when a context-window rejection names the numbers', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
+      + ' Please reduce the length of the input prompt or the number of requested output tokens.'
+      + ' (parameter=input_tokens, value=95233)' } })
+    const server = await mockServer([
+      { status: 400, body: overflow },
+      { events: textEvents },
+    ])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(2)
+    // The wire key follows the route's compat (max_tokens vs
+    // max_completion_tokens); the adapted cap rides whichever applies.
+    const capOf = (request: unknown): number | undefined => {
+      const body = request as { max_tokens?: number; max_completion_tokens?: number }
+      return body.max_tokens ?? body.max_completion_tokens
+    }
+    expect(capOf(server.requests[0])).toBe(32_768)
+    // 128000 − 95233 − 512 margin = 32255.
+    expect(capOf(server.requests[1])).toBe(32_255)
+    const finish = chunks.at(-1) as { reason?: { kind?: string } } | undefined
+    expect(finish?.reason?.kind).toBe('stop')
+  })
+
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url)
