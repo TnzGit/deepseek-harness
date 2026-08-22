@@ -6,7 +6,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SecretField, ValueField } from '../src/client/fields.tsx'
+import { SecretField, SelectField, ValueField } from '../src/client/fields.tsx'
 
 afterEach(cleanup)
 
@@ -152,5 +152,72 @@ describe('SecretField', () => {
     )
 
     expect(screen.getByLabelText('API key')).toHaveProperty('disabled', true)
+  })
+})
+
+describe('SelectField', () => {
+  const select = {
+    id: 'trigger',
+    label: 'Trigger',
+    hint: 'When a notification fires.',
+    overriddenLabel: 'Overridden',
+    resetLabel: 'Reset to default',
+    invalidLabel: 'Choose a listed option.',
+    disabled: false,
+    overridden: false,
+    invalid: false,
+  }
+  const options = [
+    { value: 'turn-end', label: '每轮回复结束' },
+    { value: 'goal-complete', label: '仅目标完成时' },
+  ]
+
+  it('stages the chosen option without writing', () => {
+    const onEdit = vi.fn()
+    render(<SelectField {...select} options={options} text="turn-end" onEdit={onEdit} onReset={vi.fn()} />)
+
+    expect(screen.getByLabelText('Trigger')).toHaveProperty('value', 'turn-end')
+    fireEvent.change(screen.getByLabelText('Trigger'), { target: { value: 'goal-complete' } })
+
+    expect(onEdit).toHaveBeenCalledWith('goal-complete')
+  })
+
+  it('renders the option labels it is given', () => {
+    render(<SelectField {...select} options={options} text="turn-end" onEdit={vi.fn()} onReset={vi.fn()} />)
+
+    expect(screen.getByRole('option', { name: '每轮回复结束' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: '仅目标完成时' })).toBeTruthy()
+  })
+
+  it('offers the reset only while an override would stand', () => {
+    const onReset = vi.fn()
+    const { rerender } = render(
+      <SelectField {...select} options={options} text="turn-end" onEdit={vi.fn()} onReset={onReset} />,
+    )
+    expect(screen.queryByRole('button', { name: 'Reset to default' })).toBeNull()
+
+    rerender(<SelectField {...select} options={options} overridden text="both" onEdit={vi.fn()} onReset={onReset} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }))
+
+    expect(screen.getByText('Overridden')).toBeTruthy()
+    expect(onReset).toHaveBeenCalledOnce()
+  })
+
+  it('replaces the hint while invalid and disables with the document', () => {
+    render(
+      <SelectField
+        {...select}
+        options={options}
+        invalid
+        disabled
+        text=""
+        onEdit={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Choose a listed option.')).toBeTruthy()
+    expect(screen.queryByText('When a notification fires.')).toBeNull()
+    expect(screen.getByLabelText('Trigger')).toHaveProperty('disabled', true)
   })
 })

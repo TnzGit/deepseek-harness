@@ -409,6 +409,13 @@ export interface ConnectionConfig {
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Allow trusted non-loopback authorities to use the configuration plane
+   * (settings, credentials, model discovery, and non-desktop preset edits).
+   * Native desktop actions remain loopback-only. This is an explicit admin
+   * grant, not authentication; enable only on a trusted LAN/VPN.
+   */
+  allowRemoteAdmin?: boolean
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }
@@ -786,6 +793,38 @@ export interface Config {
 ```
 
 来源：[`packages/hooks/hooks-codex/src/index.ts:44`](../packages/hooks/hooks-codex/src/index.ts)
+
+<a id="deepseek-aidsh-hooks-notify"></a>
+
+## `@deepseek-ai/dsh-hooks-notify`
+
+```ts config-catalog
+/** Plugin config (all optional — schema defaults carry the shipped values). */
+export interface Config {
+  /** Master switch; the plugin posts nothing while false. */
+  enabled?: boolean
+  /** Notify endpoint receiving the JSON payload. */
+  url?: string
+  /** Which task ends notify. */
+  trigger?: NotifyTrigger
+  /**
+   * Message template; `{{cwd}}`, `{{session}}`, `{{turn}}`, and `{{goal}}`
+   * substitute the ended task's facts.
+   */
+  message?: string
+  /** Device sound name forwarded verbatim. */
+  sound?: string
+  /** How many times the device repeats the sound. */
+  repeat?: number
+  /** Bounded wait for the endpoint's answer. */
+  timeoutMs?: number
+}
+
+/** When a notification fires. */
+export type NotifyTrigger = 'turn-end' | 'goal-complete' | 'both'
+```
+
+来源：[`packages/hooks/hooks-notify/src/index.ts:30`](../packages/hooks/hooks-notify/src/index.ts)
 
 <a id="deepseek-aidsh-host-apiproxy"></a>
 
@@ -3049,6 +3088,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Whether this launch explicitly permits trusted LAN clients to use remote admin APIs. */
+  allowRemoteAdmin?: boolean
 }
 ```
 

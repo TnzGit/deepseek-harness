@@ -15,6 +15,8 @@ import { BashCard } from '../src/client/BashCard.tsx'
 import type { BashCardProps } from '../src/client/BashCard.tsx'
 import { ConfigurablePluginsTab } from '../src/client/ConfigurablePluginsTab.tsx'
 import type { ConfigurablePluginsTabProps } from '../src/client/ConfigurablePluginsTab.tsx'
+import { NotifyCard } from '../src/client/NotifyCard.tsx'
+import type { NotifyCardProps } from '../src/client/NotifyCard.tsx'
 import { PluginsSettingsSection } from '../src/client/PluginsSettingsSection.tsx'
 import type { PluginsSettingsSectionProps, PluginsSettingsTabEntry } from '../src/client/PluginsSettingsSection.tsx'
 import { WebSearchCard } from '../src/client/WebSearchCard.tsx'
@@ -22,6 +24,7 @@ import type { WebSearchCardProps } from '../src/client/WebSearchCard.tsx'
 import type { AgentLoopCardState } from '../src/client/agent-loop-card-controller.ts'
 import type { BashCardState } from '../src/client/bash-card-controller.ts'
 import type { CardFieldState, CardShell } from '../src/client/card-form.ts'
+import type { NotifyCardState } from '../src/client/notify-card-controller.ts'
 import type { ConfigurablePluginsTabState } from '../src/client/tab-store.ts'
 import type { WebSearchCardState } from '../src/client/web-search-card-controller.ts'
 import { en } from '../src/client/locales.ts'
@@ -415,5 +418,83 @@ describe('WebSearchCard', () => {
       ['maxUses', '4'],
     ])
     expect(actions.resetField.mock.calls).toEqual([['baseURL'], ['maxUses']])
+  })
+})
+
+describe('NotifyCard', () => {
+  function renderNotify(state: Partial<NotifyCardState> = {}) {
+    const store = createSnapshotStore<NotifyCardState>({
+      ...settled,
+      enabled: field('false'),
+      trigger: field('turn-end'),
+      url: field('http://192.168.10.111:18473/notify'),
+      message: field('任务完成'),
+      sound: field('Glass'),
+      repeat: field('1'),
+      ...state,
+    })
+    const actions = cardActions()
+    const props = { ...actions, t, useHooksNotifyCard: bindSnapshotSelector(store) } as unknown as NotifyCardProps
+    render(<NotifyCard {...props} />)
+    return actions
+  }
+
+  it('renders nothing while its namespace is unavailable', () => {
+    const { container } = render(<div />)
+    renderNotify({ available: false })
+
+    expect(container.textContent).toBe('')
+    expect(screen.queryByText(en.hooksNotifyTitle)).toBeNull()
+  })
+
+  it('reveals the switch, the trigger, and the delivery fields once expanded', () => {
+    renderNotify()
+    expect(screen.getByText(en.hooksNotifyTitle)).toBeTruthy()
+    expect(screen.queryByLabelText(en.hooksNotifyUrl)).toBeNull()
+
+    fireEvent.click(screen.getByText(en.hooksNotifyTitle))
+
+    expect(screen.getByLabelText(en.hooksNotifyEnabled)).toBeTruthy()
+    expect(screen.getByLabelText(en.hooksNotifyTrigger)).toBeTruthy()
+    expect(screen.getByLabelText(en.hooksNotifyUrl)).toBeTruthy()
+    expect(screen.getByLabelText(en.hooksNotifyMessage)).toBeTruthy()
+    expect(screen.getByLabelText(en.hooksNotifySound)).toBeTruthy()
+    expect(screen.getByLabelText(en.hooksNotifyRepeat)).toBeTruthy()
+  })
+
+  it('offers the trigger choices with their localized labels', () => {
+    renderNotify()
+    fireEvent.click(screen.getByText(en.hooksNotifyTitle))
+
+    for (const label of [en.notifyTriggerTurnEnd, en.notifyTriggerGoalComplete, en.notifyTriggerBoth]) {
+      expect(screen.getByRole('option', { name: label })).toBeTruthy()
+    }
+  })
+
+  it('stages edits and saves through the injected actions', () => {
+    const actions = renderNotify({ dirty: true })
+    fireEvent.click(screen.getByText(en.hooksNotifyTitle))
+
+    fireEvent.change(screen.getByLabelText(en.hooksNotifyMessage), { target: { value: '第 {{turn}} 轮完成' } })
+    fireEvent.change(screen.getByLabelText(en.hooksNotifyRepeat), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: en.save }))
+
+    expect(actions.edit.mock.calls).toEqual([
+      ['message', '第 {{turn}} 轮完成'],
+      ['repeat', '3'],
+    ])
+    expect(actions.save).toHaveBeenCalledOnce()
+  })
+
+  it('disables every control while the document is read-only', () => {
+    renderNotify({ writable: false })
+    fireEvent.click(screen.getByText(en.hooksNotifyTitle))
+
+    for (const label of [
+      en.hooksNotifyEnabled, en.hooksNotifyTrigger, en.hooksNotifyUrl,
+      en.hooksNotifyMessage, en.hooksNotifySound, en.hooksNotifyRepeat,
+    ]) {
+      expect(screen.getByLabelText(label)).toHaveProperty('disabled', true)
+    }
   })
 })

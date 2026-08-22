@@ -1060,6 +1060,9 @@ importers:
       '@deepseek-ai/dsh-goal-round-driver':
         specifier: workspace:^
         version: link:../../goal/goal-round-driver
+      '@deepseek-ai/dsh-hooks-notify':
+        specifier: workspace:^
+        version: link:../../hooks/hooks-notify
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:^
         version: link:../../jobs/jobs-local
@@ -4948,6 +4951,31 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:^
         version: link:../../core/tools
+
+  packages/hooks/hooks-notify:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-goal':
+        specifier: workspace:^
+        version: link:../../goal/goal
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../../core/session
+      '@deepseek-ai/dsh-settings':
+        specifier: workspace:^
+        version: link:../../settings/settings
 
   packages/host/apiproxy:
     dependencies:

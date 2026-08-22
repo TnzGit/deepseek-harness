@@ -411,6 +411,12 @@
       config:
         apiKeyEnv: DEEPSEEK_API_KEY
 
+    # Task-end webhook notifier: posts a JSON payload to a configured LAN
+    # endpoint when an agent turn stops or a goal completes. Inert until the
+    # user enables it from its settings section (default off).
+    - id: hooks-notify
+      name: '@deepseek-ai/dsh-hooks-notify'
+
     - id: tool-web
       name: '@deepseek-ai/dsh-tool-web'
       config:

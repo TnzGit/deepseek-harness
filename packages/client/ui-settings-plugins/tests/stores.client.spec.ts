@@ -5,13 +5,16 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { stubSettingsScope, type StubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
-import { CardForm, numberField, textField } from '../src/client/card-form.ts'
+import {
+  CardForm, booleanField, numberField, selectField, textField,
+} from '../src/client/card-form.ts'
 import { AgentLoopCardController, type AgentLoopSettings } from '../src/client/agent-loop-card-controller.ts'
 import { BashCardController, type BashSettings } from '../src/client/bash-card-controller.ts'
 import {
   SettingsDescribeMirror, type SettingsMirrorSnapshot,
 } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-mirror.ts'
 import { ConfigurablePluginsTabController } from '../src/client/tab-store.ts'
+import { NotifyCardController, type HooksNotifySettings } from '../src/client/notify-card-controller.ts'
 import { WebSearchCardController, type WebSearchSettings } from '../src/client/web-search-card-controller.ts'
 
 /** Make the stub behave like a Host that accepts every write. */
@@ -383,6 +386,53 @@ describe('AgentLoopCardController', () => {
   })
 })
 
+describe('NotifyCardController', () => {
+  const section = {
+    enabled: false,
+    trigger: 'turn-end',
+    url: 'http://192.168.10.111:18473/notify',
+    message: '任务完成',
+    sound: 'Glass',
+    repeat: 1,
+  }
+
+  function controller() {
+    const host = stubSettingsScope<HooksNotifySettings>()
+    const subject = new NotifyCardController(host.scope)
+    host.publish({ status: 'ready', writable: true, value: { ...section }, base: { ...section }, user: {} })
+    return { host, subject }
+  }
+
+  it('projects every field the card renders', () => {
+    const { subject } = controller()
+
+    expect(subject.inject().hooks.hooksNotifyCard.getSnapshot()).toMatchObject({
+      available: true,
+      writable: true,
+      dirty: false,
+      enabled: { text: 'false' },
+      trigger: { text: 'turn-end' },
+      url: { text: 'http://192.168.10.111:18473/notify' },
+      message: { text: '任务完成' },
+      sound: { text: 'Glass' },
+      repeat: { text: '1' },
+    })
+  })
+
+  it('saves staged edits through the settings scope', async () => {
+    const { host, subject } = controller()
+    acceptWrites(host)
+    const face = subject.inject()
+
+    face.edit('message', '第 {{turn}} 轮完成')
+    face.edit('repeat', '3')
+    face.save()
+    await vi.waitFor(() => { expect(face.hooks.hooksNotifyCard.getSnapshot().dirty).toBe(false) })
+
+    expect(host.set.mock.calls).toEqual([['message', '第 {{turn}} 轮完成'], ['repeat', 3]])
+  })
+})
+
 describe('WebSearchCardController', () => {
   it('reads the credential state for the reference the tab names', async () => {
     const host = stubSettingsScope<WebSearchSettings>()
@@ -683,5 +733,61 @@ describe('ConfigurablePluginsTabController', () => {
 
     expect(controller.inject().hooks.configurablePlugins.getSnapshot())
       .toEqual({ loaded: true, namespaces: [] })
+  })
+})
+
+describe('CardForm boolean and select fields', () => {
+  function form() {
+    const host = stubSettingsScope<Record<string, unknown>>()
+    const subject = new CardForm(host.scope, [
+      booleanField('enabled'),
+      selectField('trigger', ['turn-end', 'goal-complete', 'both']),
+    ])
+    host.publish({
+      status: 'ready',
+      writable: true,
+      value: { enabled: false, trigger: 'turn-end' },
+      base: { enabled: false, trigger: 'turn-end' },
+      user: {},
+    })
+    return { host, subject }
+  }
+
+  it('renders stored booleans and selections as their draft text', () => {
+    const { subject } = form()
+
+    expect(subject.field('enabled').text).toBe('false')
+    expect(subject.field('trigger').text).toBe('turn-end')
+  })
+
+  it('writes real booleans from boolean drafts and refuses other text', async () => {
+    const { host, subject } = form()
+    acceptWrites(host)
+
+    subject.actions().edit('enabled', 'true')
+    expect(subject.field('enabled')).toMatchObject({ overridden: true, invalid: false })
+    await subject.save()
+    expect(host.set.mock.calls).toEqual([['enabled', true]])
+
+    subject.actions().edit('enabled', 'yes')
+    expect(subject.field('enabled')).toMatchObject({ invalid: true })
+    expect(subject.shell().invalid).toBe(true)
+  })
+
+  it('accepts only the declared select options, and an empty draft clears', async () => {
+    const { host, subject } = form()
+    acceptWrites(host)
+
+    subject.actions().edit('trigger', 'both')
+    expect(subject.field('trigger')).toMatchObject({ overridden: true, invalid: false })
+
+    subject.actions().edit('trigger', 'sometimes')
+    expect(subject.field('trigger')).toMatchObject({ invalid: true })
+    expect(subject.shell().invalid).toBe(true)
+    expect(host.set).not.toHaveBeenCalled()
+
+    subject.actions().edit('trigger', '')
+    await subject.save()
+    expect(host.set).not.toHaveBeenCalled()
   })
 })

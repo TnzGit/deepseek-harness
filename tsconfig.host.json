@@ -291,6 +291,7 @@
     { "path": "./packages/hooks/hook-protocol" },
     { "path": "./packages/hooks/hooks-claude-code" },
     { "path": "./packages/hooks/hooks-codex" },
+    { "path": "./packages/hooks/hooks-notify" },
     { "path": "./packages/mcp/mcp-client" },
     { "path": "./packages/host/apiproxy" },
     { "path": "./packages/host/directory-picker" },

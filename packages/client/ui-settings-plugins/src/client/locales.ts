@@ -11,6 +11,14 @@ export type PluginsSettingsLocaleKey =
   | 'webSearchTitle' | 'webSearchDescription'
   | 'webSearchApiKey' | 'webSearchApiKeyHint' | 'webSearchApiKeySet' | 'webSearchApiKeyUnset'
   | 'webSearchBaseUrl' | 'webSearchBaseUrlHint' | 'webSearchMaxUses' | 'webSearchMaxUsesHint'
+  | 'hooksNotifyTitle' | 'hooksNotifyDescription'
+  | 'hooksNotifyEnabled' | 'hooksNotifyEnabledHint' | 'notifySwitchOn' | 'notifySwitchOff'
+  | 'hooksNotifyTrigger' | 'hooksNotifyTriggerHint'
+  | 'notifyTriggerTurnEnd' | 'notifyTriggerGoalComplete' | 'notifyTriggerBoth'
+  | 'hooksNotifyUrl' | 'hooksNotifyUrlHint'
+  | 'hooksNotifyMessage' | 'hooksNotifyMessageHint'
+  | 'hooksNotifySound' | 'hooksNotifySoundHint'
+  | 'hooksNotifyRepeat' | 'hooksNotifyRepeatHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -51,6 +59,25 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: 'Leave blank to use the provider default.',
   webSearchMaxUses: 'Max searches per request',
   webSearchMaxUsesHint: 'How many times one request may search before it must answer.',
+  hooksNotifyTitle: 'Task-end notifications',
+  hooksNotifyDescription: 'Notifies a LAN device when a task ends.',
+  hooksNotifyEnabled: 'Notifications',
+  hooksNotifyEnabledHint: 'While off, nothing is sent.',
+  notifySwitchOn: 'On',
+  notifySwitchOff: 'Off',
+  hooksNotifyTrigger: 'Trigger',
+  hooksNotifyTriggerHint: 'Which task end sends a notification.',
+  notifyTriggerTurnEnd: 'Every turn end',
+  notifyTriggerGoalComplete: 'Goal completion only',
+  notifyTriggerBoth: 'Both',
+  hooksNotifyUrl: 'Endpoint',
+  hooksNotifyUrlHint: 'The URL receiving the POST request.',
+  hooksNotifyMessage: 'Message',
+  hooksNotifyMessageHint: 'Supports the {{cwd}}, {{session}}, {{turn}}, and {{goal}} variables.',
+  hooksNotifySound: 'Sound',
+  hooksNotifySoundHint: 'Device sound name; leave blank to restore the default (Glass).',
+  hooksNotifyRepeat: 'Repeat count',
+  hooksNotifyRepeatHint: 'How many times one notification repeats its sound.',
 }
 
 /** Simplified Chinese copy. */
@@ -92,4 +119,23 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: '留空则使用提供方默认地址。',
   webSearchMaxUses: '单次请求最多搜索次数',
   webSearchMaxUsesHint: '一次请求在必须作答前最多可以搜索多少次。',
+  hooksNotifyTitle: '任务结束通知',
+  hooksNotifyDescription: '任务结束时向局域网设备推送提醒。',
+  hooksNotifyEnabled: '通知开关',
+  hooksNotifyEnabledHint: '关闭时不发送任何通知。',
+  notifySwitchOn: '开启',
+  notifySwitchOff: '关闭',
+  hooksNotifyTrigger: '触发时机',
+  hooksNotifyTriggerHint: '选择哪种任务结束会发送通知。',
+  notifyTriggerTurnEnd: '每轮回复结束',
+  notifyTriggerGoalComplete: '仅目标完成时',
+  notifyTriggerBoth: '两者都通知',
+  hooksNotifyUrl: '通知地址',
+  hooksNotifyUrlHint: '接收 POST 请求的服务地址。',
+  hooksNotifyMessage: '提醒内容',
+  hooksNotifyMessageHint: '支持 {{cwd}}、{{session}}、{{turn}}、{{goal}} 变量。',
+  hooksNotifySound: '提示音',
+  hooksNotifySoundHint: '设备端音效名称；留空恢复默认（Glass）。',
+  hooksNotifyRepeat: '重复次数',
+  hooksNotifyRepeatHint: '同一条提醒重复播放的次数。',
 }

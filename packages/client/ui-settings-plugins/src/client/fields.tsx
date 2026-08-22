@@ -88,6 +88,60 @@ export function ValueField(props: FieldProps & {
 }
 
 /**
+ * A staged closed-choice field rendered as a select. The spec behind the card
+ * owns which values a draft may carry; this control renders the localized
+ * labels and reports the chosen value.
+ * @param props - the field's copy, its staged text, the options, and the edit actions.
+ * @returns the labelled control.
+ */
+export function SelectField(props: FieldProps & {
+  /** Every choice offered, each with its stored value and visible label. */
+  options: ReadonlyArray<{ value: string; label: string }>
+}) {
+  const known = props.options.some(option => option.value === props.text)
+  return (
+    <div className={css.field}>
+      <div className={css.head}>
+        <label className={css.label} htmlFor={props.id}>{props.label}</label>
+        {props.overridden
+          ? (
+            <span className={css.badges}>
+              <span className={css.badge}>{props.overriddenLabel}</span>
+              <button
+                type="button"
+                className={css.reset}
+                disabled={props.disabled}
+                onClick={props.onReset}
+              >
+                {props.resetLabel}
+              </button>
+            </span>
+          )
+          : null}
+      </div>
+      <select
+        id={props.id}
+        className={props.invalid ? css.inputInvalid : css.input}
+        {...props.invalid ? { 'aria-invalid': true } : {}}
+        value={props.text}
+        disabled={props.disabled}
+        onChange={(event) => { props.onEdit(event.target.value) }}
+      >
+        {/* A staged text no option carries (an absent section key) renders as
+            an unnamed entry rather than silently selecting the first option. */}
+        {!known ? <option value="" /> : null}
+        {props.options.map(option => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+      <p className={props.invalid ? css.invalid : css.hint}>
+        {props.invalid ? props.invalidLabel : props.hint}
+      </p>
+    </div>
+  )
+}
+
+/**
  * A write-only credential control. The value never rides a response, so the
  * control reports only whether one is configured and starts blank; a blank
  * draft writes nothing, which keeps the stored key rather than clearing it.
