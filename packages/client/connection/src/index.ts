@@ -64,7 +64,7 @@ export interface ConnectionConfig {
    * grant, not authentication; enable only on a trusted LAN/VPN.
    */
   allowRemoteAdmin?: boolean
-  /** Maximum buffered JSON body for every `/api` request. */
+  /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
 }
 
