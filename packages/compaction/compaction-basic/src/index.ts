@@ -10,7 +10,7 @@ import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compac
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { CONTEXT_WINDOW_EXCEEDED_CODE, assertNever } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, assertNever, contextOverflowRetryRelief } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
@@ -68,6 +68,23 @@ function conversationTarget(
   if (agent.options.provider === undefined || agent.options.provider.length === 0
     || agent.options.model === undefined || agent.options.model.length === 0) return undefined
   return { provider: agent.options.provider, model: agent.options.model }
+}
+
+/** Decide whether a durable rewrite freed enough measured input for one safe retry. */
+function hasOverflowRetryProgress(
+  failure: { readonly message: string },
+  beforeTokens: number,
+  afterTokens: number,
+): boolean {
+  const reduction = beforeTokens - afterTokens
+  if (reduction <= 0) return false
+  const required = contextOverflowRetryRelief(failure.message)
+  return required === undefined || reduction >= required
+}
+
+/** Re-read a signal whose state may have changed across an awaited recovery. */
+function isSignalAborted(signal: AbortSignal): boolean {
+  return signal.aborted
 }
 
 const thresholdRatioSchema = z.number()
@@ -189,16 +206,48 @@ export class BasicCompactionEngine extends CompactionEngine {
       if (retries >= policy.maxOverflowRetries) return next()
 
       const generation = agent.session.surface.replaceGeneration
+      let beforeTokens: number
+      try {
+        beforeTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens
+      } catch (measurementError: unknown) {
+        const message = measurementError instanceof Error
+          ? measurementError.message
+          : String(measurementError)
+        ctx.logger.warn(
+          `context-overflow recovery could not measure the original surface: ${message}; `
+          + 'preserving the original request error',
+        )
+        return next()
+      }
+      const hasMeasuredRetryProgress = (): boolean => {
+        try {
+          return hasOverflowRetryProgress(
+            failure,
+            beforeTokens,
+            this.ctx.tokenMeter.measure(agent.session).totalTokens,
+          )
+        } catch (measurementError: unknown) {
+          const message = measurementError instanceof Error
+            ? measurementError.message
+            : String(measurementError)
+          ctx.logger.warn(
+            `context-overflow recovery could not remeasure the replacement surface: ${message}; `
+            + 'preserving the original request error',
+          )
+          return false
+        }
+      }
       let result: CompactionResult | null
       try {
         result = await this.compactIfNeeded(agent, 'context-overflow', signal)
       } catch (recoveryError: unknown) {
         const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
-        // A model-free prune can land before later summary work fails. That
-        // durable reduction is sufficient retry proof; do not discard it just
-        // because the optional second phase threw. Cancellation still wins.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-        if (!signal.aborted && agent.session.surface.replaceGeneration > generation) {
+        // A model-free prune can land before later summary work fails. Retry
+        // only when the measured reduction covers the provider's reported
+        // deficit plus recount headroom. Cancellation still wins.
+        if (!isSignalAborted(signal)
+          && agent.session.surface.replaceGeneration > generation
+          && hasMeasuredRetryProgress()) {
           ctx.logger.warn(
             `context-overflow compaction failed after durable surface progress: ${message}; `
             + 'retrying from the replacement surface',
@@ -207,16 +256,21 @@ export class BasicCompactionEngine extends CompactionEngine {
           return { kind: 'retry' }
         }
         ctx.logger.warn(
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-          `context-overflow compaction failed: ${message}; ${signal.aborted
+          `context-overflow compaction failed: ${message}; ${isSignalAborted(signal)
             ? 'cancellation prevents retry'
             : 'preserving the original request error'}`,
         )
         return next()
       }
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
-      if (signal.aborted
+      if (isSignalAborted(signal)
         || agent.session.surface.replaceGeneration <= generation) return next()
+      if (!hasMeasuredRetryProgress()) {
+        ctx.logger.warn(
+          'context-overflow compaction did not free enough estimated input tokens; '
+          + 'preserving the original request error',
+        )
+        return next()
+      }
       if (result !== null) logResult(result, 'context overflow recovery')
       this.overflowRetries.set(agent, retries + 1)
       return { kind: 'retry' }
@@ -290,7 +344,8 @@ export class BasicCompactionEngine extends CompactionEngine {
       return this.compactRegion(range.start, range.end, agent, signal)
     }
 
-    const context = (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context
+    const modelInfo = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)
+    const context = modelInfo.context
     assertNoActiveCompaction(agent.session, 'automatic pressure compaction')
     const targetKey = `${target.provider}/${target.model}`
     if (context === undefined) {
@@ -300,7 +355,9 @@ export class BasicCompactionEngine extends CompactionEngine {
         + 'configure contextWindow on that adapter model',
       )
     }
-    const spec = resolveCompactSpec(policy, context.contextWindow)
+    const outputReservation = agent.session.requestHeader()?.config.maxTokens
+      ?? modelInfo.defaultMaxTokens
+    const spec = resolveCompactSpec(policy, context.contextWindow, outputReservation)
     if (measurement.totalTokens < spec.thresholdTokens) return null
 
     // Once pressure qualifies, land the model-free pass before choosing a

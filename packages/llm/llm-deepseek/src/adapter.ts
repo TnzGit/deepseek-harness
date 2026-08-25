@@ -8,7 +8,7 @@
  * @module dsh-llm-deepseek/adapter
  */
 
-import { adaptMaxTokensForContextOverflow, attributionHeaders, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { adaptMaxTokensForContextOverflow, attributionHeaders, contentHasImage, CONTEXT_ADAPT_MAX_ATTEMPTS, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -548,10 +548,10 @@ export class DeepSeekAdapter extends LlmAdapter {
       : await prepareRequestImages(requestOptions, attachments, model, signal)
     let representation: 'file' | 'base64' = 'file'
     let fileAttempt = 0
-    // One adaptive retry per request: a context-overflow rejection whose text
-    // names the window and prompt sizes lets the output cap shrink to fit.
+    // Provider recounts can shift across equivalent requests, so each bounded
+    // adaptation must consume the latest rejection and reduce the cap again.
     let effectiveMaxTokens: number | undefined = options.maxTokens
-    let adaptedOnce = false
+    let adaptationAttempts = 0
     while (true) {
       const usedFiles: UsedRequestFile[] = []
       const effectiveOptions = effectiveMaxTokens === options.maxTokens
@@ -660,13 +660,14 @@ export class DeepSeekAdapter extends LlmAdapter {
           message = normalizedImageDiagnostic(usedFiles, message, detail)
         }
         const errorCode = httpErrorCode(response.status, providerError)
-        if (!adaptedOnce && errorCode === CONTEXT_WINDOW_EXCEEDED_CODE) {
+        if (adaptationAttempts < CONTEXT_ADAPT_MAX_ATTEMPTS
+          && errorCode === CONTEXT_WINDOW_EXCEEDED_CODE) {
           const adapted = adaptMaxTokensForContextOverflow(
             detail.length > 0 ? detail : rawResponse,
             effectiveMaxTokens,
           )
           if (adapted !== undefined) {
-            adaptedOnce = true
+            adaptationAttempts += 1
             effectiveMaxTokens = adapted
             continue
           }

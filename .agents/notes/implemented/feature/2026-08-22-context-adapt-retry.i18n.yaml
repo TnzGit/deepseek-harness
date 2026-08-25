@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-22-context-adapt-retry.md
-2026-08-22-context-adapt-retry.md: c67b721eeec105e0acab4a94a297aa040248df29
-2026-08-22-context-adapt-retry.zh.md: bfca70659f340f882e063225534cb19e5f974e3c
+2026-08-22-context-adapt-retry.md: 2a9e3e9e5d8b20ca1823248dff39d35f7bba34f7
+2026-08-22-context-adapt-retry.zh.md: 8f23e3bfe113dce33db60657a6af3b2f16b32666

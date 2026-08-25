@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   adaptMaxTokensForContextOverflow,
+  contextAdaptMargin,
+  contextOverflowRetryRelief,
   parseContextOverflowNumbers,
 } from '../src/context-adapt.ts'
 
@@ -19,6 +21,7 @@ describe('parseContextOverflowNumbers', () => {
     expect(parseContextOverflowNumbers(VLLM_400)).toEqual({
       contextLength: 128_000,
       inputTokens: 95_233,
+      requestedOutputTokens: 32_768,
     })
   })
 
@@ -31,12 +34,12 @@ describe('parseContextOverflowNumbers', () => {
 
 describe('adaptMaxTokensForContextOverflow', () => {
   it('clamps the output cap into the remaining window with a safety margin', () => {
-    // 128000 − 95233 − 512 = 32255.
-    expect(adaptMaxTokensForContextOverflow(VLLM_400, 32_768)).toBe(32_255)
+    // 128000 − 95233 − 2560 (2% margin) = 30207.
+    expect(adaptMaxTokensForContextOverflow(VLLM_400, 32_768)).toBe(30_207)
   })
 
   it('also adapts when the request set no explicit cap', () => {
-    expect(adaptMaxTokensForContextOverflow(VLLM_400)).toBe(32_255)
+    expect(adaptMaxTokensForContextOverflow(VLLM_400)).toBe(30_207)
   })
 
   it('keeps the original request when the cap already fits', () => {
@@ -51,5 +54,19 @@ describe('adaptMaxTokensForContextOverflow', () => {
 
   it('declines when the text carries no usable numbers', () => {
     expect(adaptMaxTokensForContextOverflow('prompt too long for this model', 32_768)).toBeUndefined()
+  })
+})
+
+describe('context recount headroom', () => {
+  it('uses two percent for large windows and the fixed minimum for small ones', () => {
+    expect(contextAdaptMargin(128_000)).toBe(2_560)
+    expect(contextAdaptMargin(32_000)).toBe(2_048)
+  })
+
+  it('requires the provider deficit plus recount headroom before a compaction retry', () => {
+    expect(contextOverflowRetryRelief(VLLM_400)).toBe(2_561)
+    expect(contextOverflowRetryRelief(
+      'maximum context length is 128000 tokens; prompt contains 95233 input tokens',
+    )).toBeUndefined()
   })
 })

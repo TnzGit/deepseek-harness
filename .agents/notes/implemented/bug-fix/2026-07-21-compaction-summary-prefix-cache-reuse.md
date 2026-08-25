@@ -24,11 +24,16 @@ The summarization directive moves from the **front** of the request (a fresh `sy
 
 Auto-compaction always anchors at the surface head, so the shadowed region is the head of the routed request and the replayed prefix matches it exactly — the guaranteed-hit case. Manual mid-range `compactRegion` still replays the true prefix and stays correct, but forgoes reuse because its shadowed region is not the request head. A configured `summarizationProvider`/`summarizationModel` that differs from the conversation's route also forgoes reuse; that is the deployment's explicit trade-off, not a defect. Target resolution (configured override → latest routed header → agent options, else throw) is unchanged.
 
+### Compaction consumes its cap on checkpoint text
+
+The auxiliary request carries `GenerateOptions.purpose: 'compaction'`. Built-in DeepSeek and pi-ai adapters disable model reasoning for that purpose while preserving the replayed system, tools, and message prefix. Reasoning is excluded from the durable checkpoint already; disabling it prevents hidden thinking from consuming the 8192-token default summary cap and returning an incomplete checkpoint after a long auxiliary call.
+
 ## Alternatives considered
 
 - **Keep the summarizer system prompt but reuse the rest** — rejected: the system slot is the very first token region a provider caches on, so a distinct summarizer system prompt invalidates the whole prefix regardless of what follows. Only moving the directive off the front recovers the cache.
 - **Send only the shadowed region without the `system`/`tools` head** — rejected: a differently-headed sequence still diverges from the cached request at the first token, so it caches no better while losing the framing the summary needs.
 - **Omit `tools` from the summarization request** (the model never calls one) — rejected: tool schemas are part of the cached token sequence; omitting them misaligns every following token and defeats reuse.
+- **Keep configured reasoning for compaction** — rejected: those private tokens are discarded, can exhaust the summary cap before checkpoint text completes, and do not improve cache-prefix alignment.
 - **A dedicated `assistant/chunk`-emitting summarization sub-session for snapshot replay** — rejected: the durable `compaction/summary` event records the successful local call's position and complete output, while its explicit call marker prevents replay from treating template or remote output as a local stream.
 
 ## Consequences
@@ -36,10 +41,11 @@ Auto-compaction always anchors at the surface head, so the shadowed region is th
 - **`dsh-compaction-basic`** owns `SummarizationInput`; the protected `summarize(input, agent, signal?)` hook signature changed (acceptable pre-release), and `region.ts` gained `buildSummarizationInput` folding `deriveEventMessage` over the shadowed seqs behind the header prefix.
 - **Dead render surface removed.** The old flattening path (`renderTranscript` / `renderContentBlocks` and its spec in `dsh-compaction`) had no remaining consumer and was deleted with its export.
 - **README model experience** for `dsh-compaction-basic` now documents the auxiliary request as the replayed prefix plus a trailing compaction-instruction message, and its KV-cache effect as reuse of the warm conversation prefix.
+- **Reasoning is disabled for built-in compaction calls**, leaving the configured output cap for durable checkpoint text while ordinary conversation requests keep their configured reasoning behavior.
 - **The framed checkpoint output is unchanged**, so the landed `user/message` and every conversation-request snapshot are unaffected; only the auxiliary request's shape changed.
 
 ## Testing
 
-- **Unit:** `compaction-basic.spec.ts` asserts the auxiliary call forwards `system`/`tools`/leading messages and appends the compaction instruction as the final message, and that `compactRegion` replays the latest routed header prefix. Existing content assertions read the summarizer input through the replayed messages rather than a transcript string.
+- **Unit:** `compaction-basic.spec.ts` asserts the auxiliary call forwards `system`/`tools`/leading messages and appends the compaction instruction as the final message, and that `compactRegion` replays the latest routed header prefix. Adapter tests pin disabled thinking for `purpose: 'compaction'`. Existing content assertions read the summarizer input through the replayed messages rather than a transcript string.
 - **Loop:** `compact-loop-repro.spec.ts` classifies the summarization request by the compaction instruction in its trailing user message, and the overflow-recovery tests continue to pin conversation-vs-summary request counts across the real loop.
 - **Snapshot:** keyless replay reconstructs one canonical successful stream from a marked `compaction/summary`; the [compaction-seam note](../feature/2026-06-18-compaction-capability-seam.md) owns the durable marker contract.

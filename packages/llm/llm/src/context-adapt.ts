@@ -13,6 +13,8 @@ export interface ContextOverflowNumbers {
   readonly contextLength: number
   /** Tokens the provider counted for the request's input side. */
   readonly inputTokens: number
+  /** Output tokens reserved by the rejected request, when the provider reports them. */
+  readonly requestedOutputTokens?: number
 }
 
 /**
@@ -26,14 +28,36 @@ export function parseContextOverflowNumbers(detail: string): ContextOverflowNumb
   const contextLength = /context (?:length|window) (?:is |of )?(\d{3,})/i.exec(detail)?.[1]
   const inputTokens = /(\d{2,}) input tokens/i.exec(detail)?.[1]
   if (contextLength === undefined || inputTokens === undefined) return undefined
-  return { contextLength: Number(contextLength), inputTokens: Number(inputTokens) }
+  const requestedOutputTokens = /requested (\d{2,}) output tokens/i.exec(detail)?.[1]
+  return {
+    contextLength: Number(contextLength),
+    inputTokens: Number(inputTokens),
+    ...requestedOutputTokens === undefined
+      ? {}
+      : { requestedOutputTokens: Number(requestedOutputTokens) },
+  }
 }
 
-/** Safety margin reserved below the window when clamping the output cap. */
-export const CONTEXT_ADAPT_MARGIN_TOKENS = 512
+/** Minimum safety margin retained below a provider's reported context window. */
+export const CONTEXT_ADAPT_MIN_MARGIN_TOKENS = 2048
+
+/** Fractional safety margin retained for larger model windows. */
+export const CONTEXT_ADAPT_MARGIN_RATIO = 0.02
+
+/** Maximum number of monotonic output-cap adaptations within one adapter call. */
+export const CONTEXT_ADAPT_MAX_ATTEMPTS = 3
 
 /** Smallest output reservation a clamped retry still considers useful. */
 export const CONTEXT_ADAPT_MIN_OUTPUT_TOKENS = 2048
+
+/**
+ * Resolve the context headroom retained across provider token recounts.
+ * @param contextLength - positive provider-reported context capacity.
+ * @returns the larger of the fixed minimum and two percent of the window.
+ */
+export function contextAdaptMargin(contextLength: number): number {
+  return Math.max(CONTEXT_ADAPT_MIN_MARGIN_TOKENS, Math.ceil(contextLength * CONTEXT_ADAPT_MARGIN_RATIO))
+}
 
 /**
  * Compute the output cap one adaptive retry should use for a
@@ -52,8 +76,25 @@ export function adaptMaxTokensForContextOverflow(
 ): number | undefined {
   const numbers = parseContextOverflowNumbers(detail)
   if (numbers === undefined) return undefined
-  const allowed = numbers.contextLength - numbers.inputTokens - CONTEXT_ADAPT_MARGIN_TOKENS
+  const allowed = numbers.contextLength - numbers.inputTokens - contextAdaptMargin(numbers.contextLength)
   if (allowed < CONTEXT_ADAPT_MIN_OUTPUT_TOKENS) return undefined
   if (requestedMaxTokens !== undefined && allowed >= requestedMaxTokens) return undefined
   return allowed
+}
+
+/**
+ * Compute the measured input reduction required before a failed compaction may
+ * retry one provider-rejected request. Provider-reported deficit alone is not
+ * enough because token counts may shift between otherwise equivalent calls.
+ * @param detail - the provider context-overflow diagnostic.
+ * @returns required input-token relief, or undefined when the provider omitted the output reservation.
+ */
+export function contextOverflowRetryRelief(detail: string): number | undefined {
+  const numbers = parseContextOverflowNumbers(detail)
+  if (numbers?.requestedOutputTokens === undefined) return undefined
+  const deficit = Math.max(
+    1,
+    numbers.inputTokens + numbers.requestedOutputTokens - numbers.contextLength,
+  )
+  return deficit + contextAdaptMargin(numbers.contextLength)
 }

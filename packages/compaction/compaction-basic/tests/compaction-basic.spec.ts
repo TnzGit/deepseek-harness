@@ -31,7 +31,10 @@ const SIGNAL = new AbortController().signal
 const MODEL = 'test-model'
 
 class ContextAdapter extends LlmAdapter {
-  constructor(private readonly contextWindow: number) {
+  constructor(
+    private readonly contextWindow: number,
+    private readonly defaultMaxTokens?: number,
+  ) {
     super()
   }
 
@@ -41,6 +44,7 @@ class ContextAdapter extends LlmAdapter {
       id: model,
       name: model,
       context: { contextWindow: this.contextWindow },
+      ...this.defaultMaxTokens === undefined ? {} : { defaultMaxTokens: this.defaultMaxTokens },
     })
   }
 
@@ -69,11 +73,14 @@ class RoutedContextAdapter extends LlmAdapter {
   }
 }
 
-function createContext(contextWindow = 1_000): Context {
+function createContext(contextWindow = 1_000, defaultMaxTokens?: number): Context {
   const ctx = new Context()
   void new LlmRuntime(ctx)
   void new TokenMeter(ctx)
-  ctx.llm.registerAdapter([MODEL, 'actual', 'unlisted-provider'], new ContextAdapter(contextWindow))
+  ctx.llm.registerAdapter(
+    [MODEL, 'actual', 'unlisted-provider'],
+    new ContextAdapter(contextWindow, defaultMaxTokens),
+  )
   return ctx
 }
 
@@ -375,6 +382,19 @@ describe('compact configuration and defaults', () => {
     })
   })
 
+  it('starts pressure before an effective output reservation crowds the context window', () => {
+    const policy = resolveTargetPolicy(resolveConfig({}), {
+      provider: MODEL,
+      model: MODEL,
+    })
+
+    expect(resolveCompactSpec(policy, 128_000, 32_768)).toMatchObject({
+      // min(80% of 128000, 128000 − 32768 − 2560 recount margin)
+      thresholdTokens: 92_672,
+      retainTokens: 20_480,
+    })
+  })
+
   it('inherits, clears, and replaces the summarization target as a pair', () => {
     const config = resolveConfig({
       summarizationProvider: 'default-provider',
@@ -472,6 +492,8 @@ describe('compact configuration and defaults', () => {
     expect(() => resolveCompactSpec(invalidPressure, 1_000)).toThrow(/less than threshold/)
     expect(() => resolveCompactSpec(invalidPressure, 1.5)).toThrow(/positive integer/)
     expect(() => resolveCompactSpec(invalidPressure, 0)).toThrow(/positive integer/)
+    expect(() => resolveCompactSpec(invalidPressure, 1_000, 0)).toThrow(/positive safe integer/)
+    expect(() => resolveCompactSpec(invalidPressure, 1_000, 2_000)).toThrow(/leaves no input capacity/)
   })
 
 })
@@ -1462,6 +1484,13 @@ describe('automatic listener and loader composition', () => {
     return Object.assign(new Error(message), { code: CONTEXT_WINDOW_EXCEEDED_CODE })
   }
 
+  function measuredOverflow(): Error & { code: string } {
+    return overflow(
+      "This model's maximum context length is 128000 tokens. However, you requested 32255 output tokens"
+      + ' and your prompt contains at least 95746 input tokens, for a total of at least 128001 tokens.',
+    )
+  }
+
   it('compacts before a step above threshold using the durable routed model and remains idle below it', async () => {
     const ctx = createContext()
     const compact = new TestCompactionEngine(ctx, {
@@ -1475,6 +1504,23 @@ describe('automatic listener and loader composition', () => {
     const small = conversation(1)
     await preStep(ctx, agent(small, MODEL))
     expect(small.events.some(event => event.type === 'compaction/start')).toBe(false)
+    expect(compact.calls).toHaveLength(1)
+  })
+
+  it('uses the adapter output default when deciding proactive pressure', async () => {
+    const ctx = createContext(10_000, 4_000)
+    const compact = new TestCompactionEngine(ctx, {
+      thresholdRatio: 1,
+      retainTokens: 1_000,
+    })
+    const session = conversation(4, 'reservation pressure '.repeat(200).trim())
+    const measured = ctx.tokenMeter.measure(session).totalTokens
+    expect(measured).toBeGreaterThan(3_952)
+    expect(measured).toBeLessThan(10_000)
+
+    await preStep(ctx, agent(session, MODEL))
+
+    expect(session.events.some(event => event.type === 'compaction/summary')).toBe(true)
     expect(compact.calls).toHaveLength(1)
   })
 
@@ -1630,6 +1676,45 @@ describe('automatic listener and loader composition', () => {
     expect(session.events.findLast(event => event.type === 'compaction/end')?.data)
       .toMatchObject({ error: 'summary unavailable after prune' })
     expect(warnings).toContainEqual(expect.stringContaining('retrying from the replacement surface'))
+  })
+
+  it('preserves the provider error when failed compaction frees less than recount headroom', async () => {
+    const ctx = createContext(128_000)
+    const warnings: string[] = []
+    ctx.logger.warn = ((message: string) => void warnings.push(message)) as typeof ctx.logger.warn
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary hit its output cap')
+    const session = oversizedToolResult(300, true)
+
+    expect(await recover(ctx, agent(session, MODEL), measuredOverflow())).toBe(false)
+    expect(session.surface.replaceGeneration).toBe(1)
+    expect(warnings).toContainEqual(expect.stringContaining('preserving the original request error'))
+  })
+
+  it('retries after failed compaction when pruning alone clears measured recount headroom', async () => {
+    const ctx = createContext(128_000)
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary hit its output cap')
+    const session = oversizedToolResult(20_000, true)
+
+    expect(await recover(ctx, agent(session, MODEL), measuredOverflow())).toBe(true)
+    expect(session.surface.replaceGeneration).toBe(1)
   })
 
   it('lets cancellation win when summary throws after a durable prune', async () => {

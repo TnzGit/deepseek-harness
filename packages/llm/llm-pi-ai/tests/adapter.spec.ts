@@ -61,7 +61,7 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
-  it('adapts the output cap once when a context-window rejection names the numbers', async () => {
+  it('adapts the output cap when a context-window rejection names the numbers', async () => {
     const overflow = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
       + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
@@ -92,10 +92,43 @@ describe('PiAiAdapter provider routing', () => {
       return body.max_tokens ?? body.max_completion_tokens
     }
     expect(capOf(server.requests[0])).toBe(32_768)
-    // 128000 − 95233 − 512 margin = 32255.
-    expect(capOf(server.requests[1])).toBe(32_255)
+    // 128000 − 95233 − 2560 recount margin = 30207.
+    expect(capOf(server.requests[1])).toBe(30_207)
     const finish = chunks.at(-1) as { reason?: { kind?: string } } | undefined
     expect(finish?.reason?.kind).toBe('stop')
+  })
+
+  it('readapts from the latest provider recount before surfacing context overflow', async () => {
+    const first = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+    const second = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 30207 output tokens"
+      + ' and your prompt contains at least 98000 input tokens, for a total of at least 128207 tokens.' } })
+    const server = await mockServer([
+      { status: 400, body: first },
+      { status: 400, body: second },
+      { events: textEvents },
+    ])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    const capOf = (request: unknown): number | undefined => {
+      const body = request as { max_tokens?: number; max_completion_tokens?: number }
+      return body.max_tokens ?? body.max_completion_tokens
+    }
+    expect(server.requests.map(capOf)).toEqual([32_768, 30_207, 27_440])
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
   })
 
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
@@ -204,6 +237,21 @@ describe('PiAiAdapter provider routing', () => {
       failure: { code: 'UNSUPPORTED_REASONING_EFFORT' },
     })
     expect(server.requests).toHaveLength(2)
+  })
+
+  it('disables reasoning for compaction requests', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      reasoningEffort: ReasoningEffortId('max'),
+      purpose: 'compaction',
+      messages: [],
+    })
+
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
   })
 
   it('preserves omitted profile options when constructing the adapter directly', async () => {

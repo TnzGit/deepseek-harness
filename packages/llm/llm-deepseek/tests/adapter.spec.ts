@@ -587,7 +587,7 @@ describe('DeepSeekAdapter against a mock server', () => {
     })
   })
 
-  it('adapts the output cap once when a 400 overflow names the window numbers', async () => {
+  it('adapts the output cap when a 400 overflow names the window numbers', async () => {
     const raw = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
       + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
@@ -611,8 +611,36 @@ describe('DeepSeekAdapter against a mock server', () => {
 
     expect(server.requests).toHaveLength(2)
     expect((server.requests[0] as { max_tokens?: number }).max_tokens).toBe(32_768)
-    // 128000 − 95233 − 512 margin = 32255.
-    expect((server.requests[1] as { max_tokens?: number }).max_tokens).toBe(32_255)
+    // 128000 − 95233 − 2560 recount margin = 30207.
+    expect((server.requests[1] as { max_tokens?: number }).max_tokens).toBe(30_207)
+  })
+
+  it('readapts from the latest provider recount before surfacing context overflow', async () => {
+    const first = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+    const second = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 30207 output tokens"
+      + ' and your prompt contains at least 98000 input tokens, for a total of at least 128207 tokens.' } })
+    const server = await mockServer([
+      { kind: 'http-error', status: 400, body: first },
+      { kind: 'http-error', status: 400, body: second },
+      { kind: 'sse', events: textEvents },
+    ])
+    const adapter = adapterOf({ baseURL: server.url })
+
+    await drain(adapter.stream({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    }))
+
+    expect(server.requests.map(request => (request as { max_tokens?: number }).max_tokens))
+      .toEqual([32_768, 30_207, 27_440])
   })
 
   it('surfaces the overflow when the remaining window funds no useful completion', async () => {

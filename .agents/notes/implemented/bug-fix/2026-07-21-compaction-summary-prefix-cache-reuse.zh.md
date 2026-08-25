@@ -24,11 +24,16 @@ Status: implemented
 
 自动压缩总是锚定在表层头部，因此被遮蔽区域就是已路由请求的头部，回放的前缀与之完全匹配，这就是保证命中的情形。手动的中段 `compactRegion` 仍然回放真实的前缀并保持正确，但会放弃复用，因为它的被遮蔽区域不是请求头部。配置的 `summarizationProvider`/`summarizationModel` 若与对话的路由不同，也会放弃复用；这是部署方明确的权衡，而非缺陷。目标解析（配置的覆盖值 → 最新的已路由 header → agent（智能体）选项，否则抛出）保持不变。
 
+### 压缩将上限用于检查点文本
+
+辅助请求携带 `GenerateOptions.purpose: 'compaction'`。内置 DeepSeek 与 pi-ai 适配器会针对此用途禁用模型推理，同时保留回放的 system、工具与消息前缀。推理本就不会进入持久检查点；禁用它可防止隐藏思考耗尽默认 8192-token 摘要上限，并避免辅助调用运行很久后只返回不完整检查点。
+
 ## 考虑过的替代方案
 
 - **保留摘要器系统提示词但复用其余部分**——否决：system 槽位正是提供方最先做缓存的 token 区域，因此一个不同的摘要器系统提示词无论后面跟着什么都会使整个前缀失效。只有把指令移离前端才能恢复缓存。
 - **只发送被遮蔽区域而不带 `system`/`tools` 头部**——否决：头部不同的序列在第一个 token 处仍然与已缓存请求分叉，因此缓存效果并不更好，反而丢失了摘要所需的框架。
 - **从摘要请求中省略 `tools`**（模型从不调用任何工具）——否决：工具 schema 是已缓存 token 序列的一部分；省略它们会让后续每个 token 失去对齐，破坏复用。
+- **为压缩保留已配置推理**——否决：这些私有 token 最终会被丢弃，可能在检查点文本完成前耗尽摘要上限，而且不会改善缓存前缀对齐。
 - **为快照回放专门建立一个发出 `assistant/chunk` 的摘要子会话**——否决：持久的 `compaction/summary` 事件会记录成功本地调用的位置和完整输出，而显式调用标记可防止回放把模板或远程输出当作本地流。
 
 ## 后果
@@ -36,10 +41,11 @@ Status: implemented
 - **`dsh-compaction-basic`** 拥有 `SummarizationInput`；受保护的 `summarize(input, agent, signal?)` 钩子签名发生变化（发布前可接受），并且 `region.ts` 新增了 `buildSummarizationInput`，它在 header 前缀之后对被遮蔽的 seq 折叠 `deriveEventMessage`。
 - **移除无用的渲染表面。** 旧的拍平路径（`renderTranscript` / `renderContentBlocks` 及其在 `dsh-compaction` 中的 spec）已无消费方，连同其导出一并删除。
 - **README 的 Model Experience** 现在把 `dsh-compaction-basic` 的辅助请求记述为回放的前缀加上一条尾部压缩指令消息，并把其 KV Cache 效果记述为复用已预热的对话前缀。
+- **内置压缩调用会禁用推理**，把已配置的输出上限留给持久检查点文本；普通对话请求仍保留其已配置推理行为。
 - **带框架的检查点输出未改变**，因此落地的 `user/message` 和每个对话请求快照都不受影响；只有辅助请求的形状发生了变化。
 
 ## 测试
 
-- **单元：** `compaction-basic.spec.ts` 断言辅助调用转发 `system`/`tools`/前导消息，并把压缩指令作为最后一条消息追加，且 `compactRegion` 回放最新的已路由 header 前缀。现有的内容断言通过回放的消息而非 transcript 字符串来读取摘要器输入。
+- **单元：** `compaction-basic.spec.ts` 断言辅助调用转发 `system`/`tools`/前导消息，并把压缩指令作为最后一条消息追加，且 `compactRegion` 回放最新的已路由 header 前缀。适配器测试固定 `purpose: 'compaction'` 时禁用思考。现有的内容断言通过回放的消息而非 transcript 字符串来读取摘要器输入。
 - **循环：** `compact-loop-repro.spec.ts` 依据摘要请求尾部 user 消息中的压缩指令对其分类，溢出恢复测试则继续在真实循环中固定对话请求与摘要请求的数量。
 - **快照：** 无密钥回放会从带标记的 `compaction/summary` 重建一条规范成功流；[compaction-seam Agent Note](../feature/2026-06-18-compaction-capability-seam.zh.md) 负责持久标记约定。

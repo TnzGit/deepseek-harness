@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-compaction-basic/config
  */
 
-import { deepFreeze } from '@deepseek-ai/dsh-llm'
+import { contextAdaptMargin, deepFreeze } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type {
   BasicCompactionConfig,
@@ -128,11 +128,13 @@ export function resolveTargetPolicy(
  * Scale one routed policy into concrete token budgets for its model capacity.
  * @param policy - merged policy for the exact routed target.
  * @param contextWindow - positive adapter-owned capacity for that target.
+ * @param outputReservationTokens - effective request output cap, when known.
  * @returns detached immutable pressure and retention budgets.
  */
 export function resolveCompactSpec(
   policy: ResolvedTargetPolicy,
   contextWindow: number,
+  outputReservationTokens?: number,
 ): ResolvedCompactSpec {
   const targetKey = `${policy.target.provider}/${policy.target.model}`
   if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
@@ -141,7 +143,25 @@ export function resolveCompactSpec(
       `BasicCompactionConfig: contextWindow (${contextWindow}) must be a positive integer`,
     )
   }
-  const thresholdTokens = Math.floor(contextWindow * policy.thresholdRatio)
+  if (outputReservationTokens !== undefined
+    && (!Number.isSafeInteger(outputReservationTokens) || outputReservationTokens <= 0)) {
+    throw new TargetPressureConfigError(
+      targetKey,
+      `BasicCompactionConfig: output reservation (${outputReservationTokens}) must be a positive safe integer`,
+    )
+  }
+  const ratioThreshold = Math.floor(contextWindow * policy.thresholdRatio)
+  const reservedThreshold = outputReservationTokens === undefined
+    ? ratioThreshold
+    : contextWindow - outputReservationTokens - contextAdaptMargin(contextWindow)
+  const thresholdTokens = Math.min(ratioThreshold, reservedThreshold)
+  if (thresholdTokens <= 0) {
+    throw new TargetPressureConfigError(
+      targetKey,
+      `BasicCompactionConfig: output reservation (${String(outputReservationTokens)}) leaves no input capacity `
+      + `inside context window ${contextWindow}`,
+    )
+  }
   const retainTokens = policy.retainTokens === undefined
     ? Math.floor(contextWindow * policy.retainRatio)
     : policy.retainTokens

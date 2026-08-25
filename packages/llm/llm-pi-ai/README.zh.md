@@ -155,9 +155,9 @@ pi-ai 依据提供方 id 与 baseURL 决定每个请求的形状：系统提示�
 ## 词汇差异
 
 - pi-ai 工具调用参数是已解析对象；harness 存储原始 JSON 字符串。适配器会解析输入，并将输出重新字符串化。
-- pi-ai 将失败报告为流内错误事件；它们会映射到 `finish {kind:'error'|'aborted', failure}` 分片。提供方特定错误文本会区分终止型 `QUOTA` 与暂时型 `RATE_LIMIT`，针对已解析模型上下文窗口评估的文本与 usage 信号则将溢出规范化为 `CONTEXT_WINDOW_EXCEEDED`——当该拒绝的报错文本写明窗口大小与提示词 token 数时，会立即以钳制进剩余窗口的输出上限重试一次，让只是被输出预留挤爆的请求无需压缩即可恢复。终止时的 `stop` 若消息不含内容块，则会映射为 `finish {kind:'error'}`，code 为 `EMPTY_RESPONSE`（默认策略会重试），而非成功空消息。
+- pi-ai 将失败报告为流内错误事件；它们会映射到 `finish {kind:'error'|'aborted', failure}` 分片。提供方特定错误文本会区分终止型 `QUOTA` 与暂时型 `RATE_LIMIT`，针对已解析模型上下文窗口评估的文本与 usage 信号则将溢出规范化为 `CONTEXT_WINDOW_EXCEEDED`——当该拒绝的报错文本写明窗口大小与提示词 token 数时，会进行至多三次单调输出上限自适配。每次都使用提供方最新计数，并将 2048 token 与窗口百分之二两者中的较大值预留为重新计数余量，让只是被输出预留挤爆的请求无需压缩即可恢复。终止时的 `stop` 若消息不含内容块，则会映射为 `finish {kind:'error'}`，code 为 `EMPTY_RESPONSE`（默认策略会重试），而非成功空消息。
 - pi-ai 将推理 token 折叠到输出 usage 中；没有可映射的独立推理计数。
-- pi-ai 的 `off` 思考级别会原样穿过 Harness 能力 seam，并在分派时变为被省略的 pi-ai 通用 `reasoning` 选项。
+- pi-ai 的 `off` 思考级别会原样穿过 Harness 能力 seam，并在分派时变为被省略的 pi-ai 通用 `reasoning` 选项。若模型支持该级别，压缩用途调用会强制使用它，避免私有推理耗尽摘要输出上限。
 - `GenerateOptions.stop` 会以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式输出接口无法保证所有提供方都支持它。
 
 ## 应用归因

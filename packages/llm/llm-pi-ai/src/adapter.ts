@@ -41,6 +41,7 @@ import type {
 import {
   attributionHeaders,
   contentHasImage,
+  CONTEXT_ADAPT_MAX_ATTEMPTS,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -334,20 +335,18 @@ export class PiAiAdapter extends LlmAdapter {
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
     const model = this.modelOf(snapshot, options.provider, options.model)
-    const reasoning = resolveReasoningLevel(
-      model,
-      options.reasoningEffort ?? profile.reasoning,
-    )
+    const reasoning = options.purpose === 'compaction'
+      ? getSupportedThinkingLevels(model).some(level => level === 'off') ? 'off' : undefined
+      : resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
 
     try {
-      // One adaptive retry per request: a context-window rejection whose text
-      // names the window and prompt sizes lets the output cap shrink to fit,
-      // so a reservation-crowded request recovers without touching history.
+      // Provider recounts can shift across equivalent requests, so each bounded
+      // adaptation consumes the latest rejection and reduces the cap again.
       let effectiveMaxTokens = options.maxTokens
-      let adaptedOnce = false
+      let adaptationAttempts = 0
       outer: while (true) {
         const consumer = new AbortController()
         const upstream = options.signal === undefined
@@ -394,11 +393,12 @@ export class PiAiAdapter extends LlmAdapter {
               return
             }
             const chunk = result.value
-            if (!adaptedOnce && chunk.type === 'finish' && chunk.reason.kind === 'error'
+            if (adaptationAttempts < CONTEXT_ADAPT_MAX_ATTEMPTS
+              && chunk.type === 'finish' && chunk.reason.kind === 'error'
               && chunk.reason.failure.code === CONTEXT_WINDOW_EXCEEDED_CODE) {
               const adapted = adaptMaxTokensForContextOverflow(chunk.reason.failure.message, effectiveMaxTokens)
               if (adapted !== undefined) {
-                adaptedOnce = true
+                adaptationAttempts += 1
                 effectiveMaxTokens = adapted
                 continue outer
               }

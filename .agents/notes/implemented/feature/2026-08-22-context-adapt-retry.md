@@ -10,12 +10,13 @@ A request can fail its provider's context-window check because of the requested 
 
 ## Decision
 
-Both LLM adapter stacks (the DeepSeek fetch pipeline and the pi-ai event stream) intercept their overflow classification and, when the rejection text states the window size and prompt tokens (the vLLM/OpenAI-compatible wording), retry once with the output cap clamped to `limit − input − 512`:
+Both LLM adapter stacks (the DeepSeek fetch pipeline and the pi-ai event stream) intercept their overflow classification and, when the rejection text states the window size and prompt tokens (the vLLM/OpenAI-compatible wording), retry with the output cap clamped to `limit − input − margin`. The margin is `max(2048, ceil(limit × 0.02))`, large enough to absorb the observed tokenizer and wrapper recount drift:
 
-- **One adaptation per request** (`adaptedOnce`) — a second overflow surfaces to the existing compaction recovery untouched.
+- **At most three monotonic adaptations per adapter call** — each attempt parses the newest provider rejection and can only reduce the cap; a fourth overflow surfaces to the existing compaction recovery.
 - **Usefulness floor**: a clamp below 2048 output tokens declines; the rejection then surfaces unchanged.
 - **No explicit cap adapts too**: the provider reserved its own default, and the clamped value replaces it.
 - **Length classification stays truthful**: the DeepSeek adapter's length-stop budget uses the adapted cap, since that is what the retried request actually carries.
+- **Recovery uses the same headroom**: when the rejection also reports its output reservation, compaction-basic authorizes a retry only after token-meter remeasurement proves relief of at least `input + output − limit + margin`.
 
 The shared parsing and decision live in `dsh-llm` (`parseContextOverflowNumbers`, `adaptMaxTokensForContextOverflow`); each adapter owns only its interception point — the DeepSeek request loop rebuilds its payload, and the pi-ai generator tears down the failed attempt through its per-attempt watchdog/finally and restarts with a fresh controller.
 
@@ -27,9 +28,9 @@ The shared parsing and decision live in `dsh-llm` (`parseContextOverflowNumbers`
 ## Testing
 
 - `dsh-llm`: number extraction (vLLM wording, missing numbers) and the clamp decision (fits, no-cap, already-fits, crowded-window, unparsable).
-- DeepSeek: a scripted 400-then-success exchange pins the two wire bodies (`max_tokens` 32768 → 32255) and the crowded-window case surfaces `CONTEXT_WINDOW_EXCEEDED` after exactly one request.
-- pi-ai: the same exchange through the real OpenAI-completions client against the local mock server, asserting the adapted cap on the second request under whichever compat key the route uses.
+- DeepSeek: scripted rejection chains pin the wire caps (`32768 → 30207 → 27440`) and prove each retry uses the newest provider recount.
+- pi-ai: the same chain through the real OpenAI-completions client against the local mock server, asserting each adapted cap under whichever compat key the route uses.
 
 ## Consequences
 
-Adaptation is silent by design: a successful retry looks like any other response, and a declined one behaves exactly as before compaction existed. The margin and floor are fixed safety constants, not configuration.
+Adaptation is silent by design: a successful retry looks like any other response, and a declined one behaves exactly as before compaction existed. The attempt bound, margin rule, and usefulness floor are shared safety constants, not deployment configuration.
