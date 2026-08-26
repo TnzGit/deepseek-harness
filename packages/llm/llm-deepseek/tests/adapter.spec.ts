@@ -587,10 +587,10 @@ describe('DeepSeekAdapter against a mock server', () => {
     })
   })
 
-  it('adapts the output cap when a 400 overflow names the window numbers', async () => {
+  it('adapts the output cap when a 400 overflow names exact window numbers', async () => {
     const raw = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
-      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.'
       + ' Please reduce the length of the input prompt or the number of requested output tokens.'
       + ' (parameter=input_tokens, value=95233)' } })
     const server = await mockServer([
@@ -618,10 +618,10 @@ describe('DeepSeekAdapter against a mock server', () => {
   it('readapts from the latest provider recount before surfacing context overflow', async () => {
     const first = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
-      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.' } })
     const second = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 30207 output tokens"
-      + ' and your prompt contains at least 98000 input tokens, for a total of at least 128207 tokens.' } })
+      + ' and your prompt contains 98000 input tokens, for a total of 128207 tokens.' } })
     const server = await mockServer([
       { kind: 'http-error', status: 400, body: first },
       { kind: 'http-error', status: 400, body: second },
@@ -641,6 +641,25 @@ describe('DeepSeekAdapter against a mock server', () => {
 
     expect(server.requests.map(request => (request as { max_tokens?: number }).max_tokens))
       .toEqual([32_768, 30_207, 27_440])
+  })
+
+  it('does not adapt from a vLLM lower-bound overflow sentinel', async () => {
+    const raw = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+    const server = await mockServer([
+      { kind: 'http-error', status: 400, body: raw },
+      { kind: 'sse', events: textEvents },
+    ])
+    const adapter = adapterOf({ baseURL: server.url })
+
+    await expect(drain(adapter.stream({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      maxTokens: 32_768,
+    }))).rejects.toMatchObject({ code: CONTEXT_WINDOW_EXCEEDED_CODE })
+    expect(server.requests).toHaveLength(1)
   })
 
   it('surfaces the overflow when the remaining window funds no useful completion', async () => {

@@ -10,7 +10,13 @@ import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compac
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { CONTEXT_WINDOW_EXCEEDED_CODE, assertNever, contextOverflowRetryRelief } from '@deepseek-ai/dsh-llm'
+import {
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  assertNever,
+  contextAdaptMargin,
+  contextOverflowRetryRelief,
+  parseContextOverflowNumbers,
+} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
@@ -26,6 +32,7 @@ import {
   assertNoActiveCompaction,
   compactSurfaceRegion,
   selectCompactableRange,
+  shrinkCompactableRange,
 } from './region.ts'
 import { summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
@@ -78,6 +85,12 @@ function hasOverflowRetryProgress(
 ): boolean {
   const reduction = beforeTokens - afterTokens
   if (reduction <= 0) return false
+  const numbers = parseContextOverflowNumbers(failure.message)
+  if (numbers?.inputTokensKind === 'lower-bound') {
+    if (numbers.requestedOutputTokens === undefined) return false
+    return afterTokens + numbers.requestedOutputTokens + contextAdaptMargin(numbers.contextLength)
+      <= numbers.contextLength
+  }
   const required = contextOverflowRetryRelief(failure.message)
   return required === undefined || reduction >= required
 }
@@ -95,6 +108,21 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+
+/** Maximum strict range halvings after a summary reaches its output cap. */
+const SUMMARY_RANGE_RETRIES = 3
+
+/** Whether an error chain represents the summarizer's fail-closed token cap. */
+function isSummaryTokenCap(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === 'MAX_TOKENS') return true
+    current = current.cause
+  }
+  return false
+}
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -403,15 +431,54 @@ export class BasicCompactionEngine extends CompactionEngine {
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<CompactionResult> {
-    return compactSurfaceRegion(
-      this.regionDependencies(),
-      agent.session,
-      start,
-      end,
+    return this.compactRangeWithFallback(
+      { start, end },
       agent,
-      { owner: 'current-turn', stability: 'whole-surface' },
-      signal,
+      range => compactSurfaceRegion(
+        this.regionDependencies(),
+        agent.session,
+        range.start,
+        range.end,
+        agent,
+        { owner: 'current-turn', stability: 'whole-surface' },
+        signal,
+      ),
     )
+  }
+
+  /** Retry a truncated summary over progressively smaller balanced prefixes. */
+  private async compactRangeWithFallback(
+    initial: { readonly start: number; readonly end: number },
+    agent: Agent,
+    run: (range: { readonly start: number; readonly end: number }) => Promise<CompactionResult>,
+  ): Promise<CompactionResult> {
+    let range = initial
+    const target = conversationTarget(agent)
+    const summaryCap = target === undefined
+      ? this.config.maxTokens
+      : resolveTargetPolicy(this.config, target).maxTokens
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.ctx.logger.info(
+          `compaction summary attempt ${attempt + 1}/${SUMMARY_RANGE_RETRIES + 1}: `
+          + `seqs ${range.start}-${range.end}, maxTokens=${summaryCap}, reasoning=off`,
+        )
+        return await run(range)
+      } catch (error: unknown) {
+        if (!isSummaryTokenCap(error) || attempt >= SUMMARY_RANGE_RETRIES) throw error
+        const smaller = shrinkCompactableRange(
+          agent.session,
+          this.ctx.tokenMeter.measure(agent.session),
+          range,
+        )
+        if (smaller === null) throw error
+        this.ctx.logger.warn(
+          'compaction summary reached its token cap; retrying a smaller balanced range '
+          + `(seqs ${range.start}-${range.end} -> ${smaller.start}-${smaller.end})`,
+        )
+        range = smaller
+      }
+    }
   }
 
   /**
@@ -439,21 +506,25 @@ export class BasicCompactionEngine extends CompactionEngine {
             0,
           )
           if (range === null) return null
-          return await compactSurfaceRegion(
-            this.regionDependencies(),
-            agent.session,
-            range.start,
-            range.end,
+          return await this.compactRangeWithFallback(
+            range,
             agent,
-            {
-              owner: null,
-              stability: 'selected-span',
-              ...sourceCommandId === undefined ? {} : { sourceCommandId },
-              flush: async () => {
-                await this.ctx.sessions.flush(agent.session)
+            candidate => compactSurfaceRegion(
+              this.regionDependencies(),
+              agent.session,
+              candidate.start,
+              candidate.end,
+              agent,
+              {
+                owner: null,
+                stability: 'selected-span',
+                ...sourceCommandId === undefined ? {} : { sourceCommandId },
+                flush: async () => {
+                  await this.ctx.sessions.flush(agent.session)
+                },
               },
-            },
-            operationSignal,
+              operationSignal,
+            ),
           )
         } catch (error: unknown) {
           if (agentSignal.aborted && operationSignal.reason === agentSignal.reason) {

@@ -43,6 +43,7 @@ class GatedCompactionEngine extends BasicCompactionEngine {
   rawOutput: ContentBlock[] | undefined
   usage: TokenUsage | undefined
   error: unknown
+  errors: unknown[] = []
   gate: Promise<undefined> | undefined
   duringSummary: (() => void) | undefined
   calls: SummarizationInput[] = []
@@ -55,6 +56,7 @@ class GatedCompactionEngine extends BasicCompactionEngine {
     this.calls.push(input)
     this.duringSummary?.()
     if (this.gate !== undefined) await this.gate
+    if (this.errors.length > 0) throw this.errors.shift()
     if (this.error !== undefined) throw this.error
     return {
       summary: this.summary,
@@ -236,6 +238,28 @@ function compactEvents(session: Session): Array<Session['events'][number]> {
 }
 
 describe('compactNow through the real loop', () => {
+  it('retries a truncated manual summary over a smaller balanced prefix', async () => {
+    const harness = await loopHarness()
+    const { agent, compact } = harness
+    await seedHistory(harness)
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `${PROMPT} second turn` }],
+      source: { kind: 'user' },
+    }))
+    await agent.whenIdle()
+    harness.log.length = 0
+    compact.errors.push(Object.assign(new Error('summary cap'), { code: 'MAX_TOKENS' }))
+
+    const result = await compact.compactNow(agent, SIGNAL)
+
+    expect(result).not.toBeNull()
+    expect(compact.calls).toHaveLength(2)
+    expect(harness.log.filter(item => item === 'compaction/start:null')).toHaveLength(2)
+    expect(harness.log.filter(item => item === 'compaction/end:null')).toHaveLength(2)
+    expect(agent.session.events.findLast(event => event.type === 'compaction/end')?.data)
+      .not.toHaveProperty('error')
+  })
+
   it('holds a prompt accepted during summarization until the standalone bracket is flushed', async () => {
     const harness = await loopHarness()
     const { agent, compact, adapter, log } = harness

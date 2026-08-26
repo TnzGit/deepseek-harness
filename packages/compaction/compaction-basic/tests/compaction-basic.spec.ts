@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
-import { selectCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
+import { selectCompactableRange, shrinkCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
 import type { SummarizationInput, SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import {
@@ -246,6 +246,7 @@ class TestCompactionEngine extends BasicCompactionEngine {
   summaryProvider = 'summary-provider'
   summaryModel = 'summary-model'
   error: unknown
+  errors: unknown[] = []
   mutateDuringSummary: (() => void) | undefined
   calls: Array<{ input: SummarizationInput; signal: AbortSignal | undefined }> = []
 
@@ -263,6 +264,7 @@ class TestCompactionEngine extends BasicCompactionEngine {
   }> {
     this.calls.push({ input, signal })
     this.mutateDuringSummary?.()
+    if (this.errors.length > 0) throw this.errors.shift()
     if (this.error !== undefined) throw this.error
     return {
       summary: this.summary,
@@ -786,6 +788,21 @@ describe('pressure measurement and retention', () => {
     const priced = ctx.tokenMeter.measure(session)
     expect(selectCompactableRange(session, priced, 1)).toBeNull()
   })
+
+  it('shrinks a failed range to a strict balanced prefix', () => {
+    const ctx = createContext()
+    const session = toolConversation()
+    const priced = ctx.tokenMeter.measure(session)
+    const original = selectCompactableRange(session, priced, 1)
+    expect(original).not.toBeNull()
+
+    const smaller = shrinkCompactableRange(session, priced, original!)
+    expect(smaller).not.toBeNull()
+    expect(smaller?.start).toBe(original?.start)
+    expect(session.surface.nodes.indexOf(smaller!.end))
+      .toBeLessThan(session.surface.nodes.indexOf(original!.end))
+    expect(toolPairingBalancedAfter(session, smaller!.end)).toBe(true)
+  })
 })
 
 describe('optional model-free tool-result pruning', () => {
@@ -861,6 +878,28 @@ describe('optional model-free tool-result pruning', () => {
 })
 
 describe('compaction region transaction', () => {
+  it('retries a max-token summary over a smaller balanced prefix', async () => {
+    const compact = service()
+    const cap = Object.assign(new Error('summary cap'), { code: 'MAX_TOKENS' })
+    compact.errors.push(cap)
+    const session = conversation(4)
+    const before = [...session.surface.nodes]
+
+    const result = await compact.compactRegion(
+      before[0]!,
+      before[5]!,
+      agent(session, MODEL),
+      SIGNAL,
+    )
+
+    expect(compact.calls).toHaveLength(2)
+    expect(summarizedText(compact.calls[0]!.input)).toContain('user 3')
+    expect(summarizedText(compact.calls[1]!.input)).not.toContain('user 3')
+    expect(result.shadowedRange.start).toBe(before[0])
+    expect(result.shadowedRange.end).toBeLessThan(before[5]!)
+    expect(session.events.filter(event => event.type === 'compaction/end')).toHaveLength(2)
+  })
+
   it('lands a framed, replayable checkpoint with exact source seqs and token price', async () => {
     const compact = service()
     compact.rawOutput = [
@@ -1487,6 +1526,13 @@ describe('automatic listener and loader composition', () => {
   function measuredOverflow(): Error & { code: string } {
     return overflow(
       "This model's maximum context length is 128000 tokens. However, you requested 32255 output tokens"
+      + ' and your prompt contains 95746 input tokens, for a total of 128001 tokens.',
+    )
+  }
+
+  function sentinelOverflow(): Error & { code: string } {
+    return overflow(
+      "This model's maximum context length is 128000 tokens. However, you requested 32255 output tokens"
       + ' and your prompt contains at least 95746 input tokens, for a total of at least 128001 tokens.',
     )
   }
@@ -1714,6 +1760,24 @@ describe('automatic listener and loader composition', () => {
     const session = oversizedToolResult(20_000, true)
 
     expect(await recover(ctx, agent(session, MODEL), measuredOverflow())).toBe(true)
+    expect(session.surface.replaceGeneration).toBe(1)
+  })
+
+  it('uses the local post-rewrite measurement for a vLLM lower-bound sentinel', async () => {
+    const ctx = createContext(128_000)
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary unavailable after prune')
+    const session = oversizedToolResult(300, true)
+
+    expect(await recover(ctx, agent(session, MODEL), sentinelOverflow())).toBe(true)
     expect(session.surface.replaceGeneration).toBe(1)
   })
 

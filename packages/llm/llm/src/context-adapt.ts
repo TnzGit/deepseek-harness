@@ -2,8 +2,9 @@
  * Adaptive output-cap recovery for provider context-window rejections. A
  * request can overflow because the requested completion reservation — not the
  * conversation itself — crowds the window; the provider's rejection text
- * carries the exact numbers, so one clamped retry fits without touching
- * history or paying for compaction.
+ * may carry exact numbers, so a clamped retry can fit without touching
+ * history or paying for compaction. Lower-bound sentinel counts are preserved
+ * as such and deliberately bypass numeric adaptation.
  * @module dsh-llm/context-adapt
  */
 
@@ -13,6 +14,8 @@ export interface ContextOverflowNumbers {
   readonly contextLength: number
   /** Tokens the provider counted for the request's input side. */
   readonly inputTokens: number
+  /** Whether the provider reported an exact count or stopped at an overflow sentinel. */
+  readonly inputTokensKind: 'exact' | 'lower-bound'
   /** Output tokens reserved by the rejected request, when the provider reports them. */
   readonly requestedOutputTokens?: number
 }
@@ -26,12 +29,14 @@ export interface ContextOverflowNumbers {
  */
 export function parseContextOverflowNumbers(detail: string): ContextOverflowNumbers | undefined {
   const contextLength = /context (?:length|window) (?:is |of )?(\d{3,})/i.exec(detail)?.[1]
-  const inputTokens = /(\d{2,}) input tokens/i.exec(detail)?.[1]
+  const inputMatch = /(at least\s+)?(\d{2,}) input tokens/i.exec(detail)
+  const inputTokens = inputMatch?.[2]
   if (contextLength === undefined || inputTokens === undefined) return undefined
   const requestedOutputTokens = /requested (\d{2,}) output tokens/i.exec(detail)?.[1]
   return {
     contextLength: Number(contextLength),
     inputTokens: Number(inputTokens),
+    inputTokensKind: inputMatch?.[1] === undefined ? 'exact' : 'lower-bound',
     ...requestedOutputTokens === undefined
       ? {}
       : { requestedOutputTokens: Number(requestedOutputTokens) },
@@ -76,6 +81,10 @@ export function adaptMaxTokensForContextOverflow(
 ): number | undefined {
   const numbers = parseContextOverflowNumbers(detail)
   if (numbers === undefined) return undefined
+  // vLLM deliberately stops tokenizing at the first overflowing token and
+  // reports "at least N". N is a lower bound, not the prompt size, so using it
+  // to reserve the apparent remainder merely produces another oversized call.
+  if (numbers.inputTokensKind === 'lower-bound') return undefined
   const allowed = numbers.contextLength - numbers.inputTokens - contextAdaptMargin(numbers.contextLength)
   if (allowed < CONTEXT_ADAPT_MIN_OUTPUT_TOKENS) return undefined
   if (requestedMaxTokens !== undefined && allowed >= requestedMaxTokens) return undefined
@@ -87,11 +96,12 @@ export function adaptMaxTokensForContextOverflow(
  * retry one provider-rejected request. Provider-reported deficit alone is not
  * enough because token counts may shift between otherwise equivalent calls.
  * @param detail - the provider context-overflow diagnostic.
- * @returns required input-token relief, or undefined when the provider omitted the output reservation.
+ * @returns required input-token relief, or undefined when the provider omitted
+ * the output reservation or reported only a lower-bound prompt count.
  */
 export function contextOverflowRetryRelief(detail: string): number | undefined {
   const numbers = parseContextOverflowNumbers(detail)
-  if (numbers?.requestedOutputTokens === undefined) return undefined
+  if (numbers?.requestedOutputTokens === undefined || numbers.inputTokensKind === 'lower-bound') return undefined
   const deficit = Math.max(
     1,
     numbers.inputTokens + numbers.requestedOutputTokens - numbers.contextLength,

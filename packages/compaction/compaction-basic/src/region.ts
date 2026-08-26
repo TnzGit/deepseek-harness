@@ -134,6 +134,51 @@ export function selectCompactableRange(
 }
 
 /**
+ * Halve one failed compaction span at the nearest earlier balanced boundary.
+ * This gives a max-token failure a monotonically smaller summarization input
+ * instead of replaying the same oversized prefix with the same output cap.
+ * @param session - session supplying authoritative surface positions.
+ * @param measurement - current token pricing for the unchanged surface.
+ * @param range - inclusive range whose summary reached its output cap.
+ * @returns a strict balanced prefix of `range`, or `null` when none exists.
+ */
+export function shrinkCompactableRange(
+  session: Session,
+  measurement: TokenMeasurement,
+  range: { readonly start: number; readonly end: number },
+): { start: number; end: number } | null {
+  const surfaceNodes = session.surface.nodes
+  const pricedNodes = measurement.nodes
+  if (surfaceNodes.length !== pricedNodes.length
+    || surfaceNodes.some((seq, index) => seq !== pricedNodes[index]?.seq)) {
+    throw new Error('compaction: token-meter surface does not match the current session surface')
+  }
+  const startIdx = surfaceNodes.indexOf(range.start)
+  const endIdx = surfaceNodes.indexOf(range.end)
+  if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) return null
+
+  const total = pricedNodes
+    .slice(startIdx, endIdx + 1)
+    .reduce((sum, node) => sum + node.tokens, 0)
+  const target = Math.max(1, Math.floor(total / 2))
+  let accumulated = 0
+  let firstBalanced: number | undefined
+  let preferred: number | undefined
+  for (let index = startIdx; index < endIdx; index += 1) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    accumulated += pricedNodes[index]!.tokens
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    if (!toolPairingBalancedAfter(session, surfaceNodes[index]!)) continue
+    firstBalanced ??= index
+    if (accumulated <= target) preferred = index
+  }
+  const cutoffIdx = preferred ?? firstBalanced
+  if (cutoffIdx === undefined) return null
+  // oxlint-disable-next-line typescript/no-non-null-assertion
+  return { start: range.start, end: surfaceNodes[cutoffIdx]! }
+}
+
+/**
  * Run the single compaction transaction over one selected positional span.
  * Selection and validation are read-only. Idle/log validation and
  * `compaction/start` are synchronously adjacent, so the durable opening marker is

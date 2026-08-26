@@ -61,10 +61,10 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
-  it('adapts the output cap when a context-window rejection names the numbers', async () => {
+  it('adapts the output cap when a context-window rejection names exact numbers', async () => {
     const overflow = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
-      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.'
       + ' Please reduce the length of the input prompt or the number of requested output tokens.'
       + ' (parameter=input_tokens, value=95233)' } })
     const server = await mockServer([
@@ -101,10 +101,10 @@ describe('PiAiAdapter provider routing', () => {
   it('readapts from the latest provider recount before surfacing context overflow', async () => {
     const first = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
-      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.' } })
     const second = JSON.stringify({ error: { message:
       "This model's maximum context length is 128000 tokens. However, you requested 30207 output tokens"
-      + ' and your prompt contains at least 98000 input tokens, for a total of at least 128207 tokens.' } })
+      + ' and your prompt contains 98000 input tokens, for a total of 128207 tokens.' } })
     const server = await mockServer([
       { status: 400, body: first },
       { status: 400, body: second },
@@ -129,6 +129,28 @@ describe('PiAiAdapter provider routing', () => {
     }
     expect(server.requests.map(capOf)).toEqual([32_768, 30_207, 27_440])
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('does not adapt from a vLLM lower-bound overflow sentinel', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+    const server = await mockServer([{ status: 400, body: overflow }, { events: textEvents }])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE } },
+    })
   })
 
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
@@ -737,6 +759,55 @@ describe('provider profile lifecycle', () => {
     await prompt('off')
     expect(server.requests[1]).toMatchObject({ thinking: { type: 'disabled' } })
     expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('dispatches custom Qwen chat-template thinking state and disables it for compaction', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'qwen-local': {
+          apiKeyEnv: 'PI_TEST_KEY',
+          api: 'openai-completions',
+          baseURL: `${server.url}/v1`,
+          reasoning: 'xhigh',
+          models: [{
+            id: 'qwen-custom',
+            reasoningEfforts: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
+            compat: {
+              thinkingFormat: 'chat-template',
+              chatTemplateKwargs: {
+                enable_thinking: { $var: 'thinking.enabled' },
+                reasoning_effort: { $var: 'thinking.effort', omitWhenOff: true },
+                preserve_thinking: true,
+              },
+            },
+          }],
+        },
+      },
+    })
+
+    await assemble(ctx, { provider: 'qwen-local', model: 'qwen-custom', messages: [] })
+    expect(server.requests[0]).toMatchObject({
+      chat_template_kwargs: {
+        enable_thinking: true,
+        reasoning_effort: 'xhigh',
+        preserve_thinking: true,
+      },
+    })
+
+    await assemble(ctx, {
+      provider: 'qwen-local',
+      model: 'qwen-custom',
+      purpose: 'compaction',
+      messages: [],
+    })
+    expect(server.requests[1]).toMatchObject({
+      chat_template_kwargs: { enable_thinking: false, preserve_thinking: true },
+    })
+    expect((server.requests[1] as { chat_template_kwargs: object }).chat_template_kwargs)
+      .not.toHaveProperty('reasoning_effort')
   })
 
   it('keeps the system role on a declared route whose gateway rejects the developer one', async () => {
