@@ -27,6 +27,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { ReactLoopAgent } from './agent.ts'
+export type { DegenerateResponseEventData } from './degenerate-response.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
 
 /** Fiber states that cannot own or serve a new lifecycle. */

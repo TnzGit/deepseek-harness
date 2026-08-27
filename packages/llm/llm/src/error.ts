@@ -39,6 +39,14 @@ export const QUOTA_EXCEEDED_CODE = 'QUOTA'
 export const EMPTY_RESPONSE_CODE = 'EMPTY_RESPONSE'
 
 /**
+ * Canonical provider-neutral code for a model that repeatedly reports a
+ * successful stop without producing a usable visible answer or tool call.
+ * The agent loop owns one contextual recovery attempt before surfacing this
+ * terminal code; generic provider retry policy must not retry it again.
+ */
+export const DEGENERATE_RESPONSE_CODE = 'DEGENERATE_RESPONSE'
+
+/**
  * Canonical provider-neutral code for a credential that was supplied but
  * cannot be used — malformed rather than absent. Distinct from
  * `MISSING_CREDENTIAL` because the fix differs: correct the stored value

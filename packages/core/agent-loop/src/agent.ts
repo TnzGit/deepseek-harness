@@ -16,9 +16,11 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { Inbox, agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
-import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
   BlockAssembler,
+  DEGENERATE_RESPONSE_CODE,
+  EMPTY_RESPONSE_CODE,
   LlmError,
   createAssistantMessage,
   deepFreeze,
@@ -34,6 +36,7 @@ import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { Context } from '@deepseek-ai/cordis'
 import { RuntimeContextProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
+import { withDegenerateRecovery } from './degenerate-response.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -50,6 +53,24 @@ type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }
 type PreparedStep =
   | { kind: 'reject' }
   | { kind: 'enter'; messages: UserMessage[]; assembly: PromptAssembly }
+
+interface DegenerateResponseFacts {
+  visibleCharacters: number
+  toolCallCount: number
+}
+
+/** Reasoning is private work, not a user-visible answer; Unicode symbols such as emoji remain valid short replies. */
+function degenerateResponseFacts(content: readonly ContentBlock[]): DegenerateResponseFacts | undefined {
+  const toolCallCount = content.filter(block => block.type === 'tool-call').length
+  if (toolCallCount > 0) return
+  const visible = content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim()
+  if (visible !== '' && !/^[\p{P}\s]+$/u.test(visible)) return
+  return { visibleCharacters: Array.from(visible).length, toolCallCount }
+}
 
 /** Remove adapter-derived values before plugins propose the next request config. */
 function requestProposal(header: EpochHeader): LlmCallConfig {
@@ -335,10 +356,16 @@ export class ReactLoopAgent implements Agent {
     const { turn, step, abort: { signal } } = this.phase
     signal.throwIfAborted()
     const system = renderPrompt(assembly)
+    let degenerateRecoveryUsed = false
 
     while (true) {
       const { request, preparedCall } = await this.buildRequest(
-        turn, step, assembly.tools, system, this.session.deriveMessages(), signal,
+        turn,
+        step,
+        assembly.tools,
+        system,
+        withDegenerateRecovery(this.session.events, this.session.deriveMessages()),
+        signal,
       )
       const assembler = new BlockAssembler()
       const chunkSeqs: number[] = []
@@ -370,6 +397,51 @@ export class ReactLoopAgent implements Agent {
         throw error
       }
       const finish = assembler.finish
+      if (finish.kind === 'error' && finish.failure.code === EMPTY_RESPONSE_CODE) {
+        if (degenerateRecoveryUsed) {
+          this.session.append('agent/degenerate-response', {
+            turn,
+            step,
+            provider: request.provider,
+            model: request.model,
+            attempt: 2,
+            action: 'error',
+            finishKind: 'stop',
+            visibleCharacters: 0,
+            toolCallCount: 0,
+            ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+          })
+          throw new LlmError(
+            `model "${request.model}" repeatedly stopped without a usable visible answer or tool call`,
+            DEGENERATE_RESPONSE_CODE,
+          )
+        }
+        degenerateRecoveryUsed = true
+        this.session.append('agent/degenerate-response', {
+          turn,
+          step,
+          provider: request.provider,
+          model: request.model,
+          attempt: 1,
+          action: 'retry',
+          finishKind: 'stop',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+        })
+        this.loopCtx.logger.warn('agent "%s": recovering degenerate model response: %o', this.id, {
+          provider: request.provider,
+          model: request.model,
+          turn,
+          step,
+          attempt: 1,
+          outputTokens: assembler.usage?.outputTokens,
+          finishKind: 'stop',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+        })
+        continue
+      }
       if (finish.kind === 'error' || finish.kind === 'aborted') {
         const action = await this.dispatch.waterfall(
           'agent/request-error', {
@@ -397,6 +469,52 @@ export class ReactLoopAgent implements Agent {
           ...assembler.replayState !== undefined ? { replayState: assembler.replayState } : {},
         },
       })
+      if (finish.kind === 'stop') {
+        const facts = degenerateResponseFacts(message.content)
+        if (facts !== undefined) {
+          const attempt = degenerateRecoveryUsed ? 2 : 1
+          this.loopCtx.logger.warn('agent "%s": detected degenerate model response: %o', this.id, {
+            provider: request.provider,
+            model: request.model,
+            turn,
+            step,
+            attempt,
+            outputTokens: assembler.usage?.outputTokens,
+            finishKind: finish.kind,
+            ...facts,
+          })
+          if (degenerateRecoveryUsed) {
+            this.session.append('agent/degenerate-response', {
+              turn,
+              step,
+              provider: request.provider,
+              model: request.model,
+              attempt: 2,
+              action: 'error',
+              finishKind: 'stop',
+              ...facts,
+              ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+            })
+            throw new LlmError(
+              `model "${request.model}" repeatedly stopped without a usable visible answer or tool call`,
+              DEGENERATE_RESPONSE_CODE,
+            )
+          }
+          degenerateRecoveryUsed = true
+          this.session.append('agent/degenerate-response', {
+            turn,
+            step,
+            provider: request.provider,
+            model: request.model,
+            attempt: 1,
+            action: 'retry',
+            finishKind: 'stop',
+            ...facts,
+            ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+          })
+          continue
+        }
+      }
       this.session.append(
         'assistant/message',
         {

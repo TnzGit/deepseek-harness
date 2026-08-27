@@ -96,6 +96,17 @@ Sources: [`packages/core/session/src/types.ts:340`](../packages/core/session/src
 
 ### `agent/*`
 
+<a id="agentdegenerate-response--log-only"></a>
+
+#### `agent/degenerate-response` — log-only
+
+```ts persistence-catalog
+/** Metadata-only record of a model stop that produced no usable visible answer or tool call. */
+'agent/degenerate-response': DegenerateResponseEventData
+```
+
+Source: [`packages/core/agent-loop/src/degenerate-response.ts:10`](../packages/core/agent-loop/src/degenerate-response.ts)
+
 <a id="agentinboxspliced--log-only"></a>
 
 #### `agent/inbox/spliced` — log-only
