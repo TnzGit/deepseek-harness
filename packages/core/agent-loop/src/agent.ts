@@ -36,7 +36,7 @@ import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { Context } from '@deepseek-ai/cordis'
 import { RuntimeContextProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
-import { withDegenerateRecovery } from './degenerate-response.ts'
+import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -359,25 +359,34 @@ export class ReactLoopAgent implements Agent {
     let degenerateRecoveryUsed = false
 
     while (true) {
+      const attemptAbort = new AbortController()
+      const attemptSignal = AbortSignal.any([signal, attemptAbort.signal])
       const { request, preparedCall } = await this.buildRequest(
         turn,
         step,
         assembly.tools,
         system,
         withDegenerateRecovery(this.session.events, this.session.deriveMessages()),
-        signal,
+        attemptSignal,
       )
       const assembler = new BlockAssembler()
       const chunkSeqs: number[] = []
+      const repetitionDetector = new StreamRepetitionDetector()
+      let streamRepetition: ReturnType<StreamRepetitionDetector['push']>
       try {
         const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)
-        signal.throwIfAborted()
+        attemptSignal.throwIfAborted()
         for await (const chunk of stream) {
           signal.throwIfAborted()
+          streamRepetition = repetitionDetector.push(chunk)
+          if (streamRepetition !== undefined) {
+            attemptAbort.abort(new Error('degenerate model stream repetition'))
+            break
+          }
           chunkSeqs.push(this.session.append('assistant/chunk', { turn, step, chunk }).seq)
           assembler.push(chunk)
         }
-        signal.throwIfAborted()
+        if (streamRepetition === undefined) attemptSignal.throwIfAborted()
       } catch (error: unknown) {
         if (signal.aborted) {
           const content = assembler.interruptedBlocks()
@@ -394,7 +403,53 @@ export class ReactLoopAgent implements Agent {
             }, { surfaceOp: 'append', sourceEventSeqs: chunkSeqs })
           }
         }
-        throw error
+        if (streamRepetition === undefined) throw error
+      }
+      if (streamRepetition !== undefined) {
+        const attempt = degenerateRecoveryUsed ? 2 : 1
+        this.loopCtx.logger.warn('agent "%s": detected degenerate model stream repetition: %o', this.id, {
+          provider: request.provider,
+          model: request.model,
+          turn,
+          step,
+          attempt,
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        if (degenerateRecoveryUsed) {
+          this.session.append('agent/degenerate-response', {
+            turn,
+            step,
+            provider: request.provider,
+            model: request.model,
+            attempt: 2,
+            action: 'error',
+            finishKind: 'stream-repetition',
+            visibleCharacters: 0,
+            toolCallCount: 0,
+            ...streamRepetition,
+          })
+          throw new LlmError(
+            `model "${request.model}" repeatedly streamed degenerate punctuation reasoning`,
+            DEGENERATE_RESPONSE_CODE,
+          )
+        }
+        degenerateRecoveryUsed = true
+        this.session.append('agent/degenerate-response', {
+          turn,
+          step,
+          provider: request.provider,
+          model: request.model,
+          attempt: 1,
+          action: 'retry',
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        continue
       }
       const finish = assembler.finish
       if (finish.kind === 'error' && finish.failure.code === EMPTY_RESPONSE_CODE) {
