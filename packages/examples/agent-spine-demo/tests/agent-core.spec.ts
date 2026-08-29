@@ -300,6 +300,17 @@ describe('dsh-agent-spine-demo bundle', () => {
     await ctx.fiber.dispose()
   })
 
+  it('forwards reasoning-only continuation guards to agent-loop', async () => {
+    const ctx = await mount({
+      maxTokenContinuations: 2,
+      maxTokenContinuationOutputTokens: 65_536,
+      workspaceContext: false,
+    })
+    expect(ctx.get('agentLoop')?.config.maxTokenContinuations).toBe(2)
+    expect(ctx.get('agentLoop')?.config.maxTokenContinuationOutputTokens).toBe(65_536)
+    await ctx.fiber.dispose()
+  })
+
   it('forwards task admission config to the process-local provider', async () => {
     const ctx = await mount({
       jobs: { maxConcurrentJobsPerOwner: 1 },
@@ -733,6 +744,7 @@ describe('dsh-agent-spine-demo bundle', () => {
     const appConfig = {
       model: 'entrypoint-only',
       maxParallelToolCalls: 3,
+      maxTokenContinuationOutputTokens: 65_536,
       includeHarnessIdentity: false,
       includeRuntimeContext: false,
       persona: 'You are merged.',
@@ -751,6 +763,7 @@ describe('dsh-agent-spine-demo bundle', () => {
 
     expect(agentCore.pickSpineConfig(appConfig)).toEqual({
       maxParallelToolCalls: appConfig.maxParallelToolCalls,
+      maxTokenContinuationOutputTokens: appConfig.maxTokenContinuationOutputTokens,
       includeHarnessIdentity: appConfig.includeHarnessIdentity,
       includeRuntimeContext: appConfig.includeRuntimeContext,
       persona: appConfig.persona,

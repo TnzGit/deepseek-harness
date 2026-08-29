@@ -151,6 +151,11 @@ export interface Config {
    * `0` disables the recovery; omission defaults to {@link DEFAULT_MAX_TOKEN_CONTINUATIONS}.
    */
   maxTokenContinuations?: number
+  /**
+   * Maximum cumulative output tokens spent by reasoning-only capped responses in one turn.
+   * Omission defaults to {@link DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS}.
+   */
+  maxTokenContinuationOutputTokens?: number
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -167,7 +172,7 @@ export interface Config {
 
 Depends on: [`AgentOptions`](subsystems/core.md) · [`SessionId`](subsystems/core.md)
 
-Source: [`packages/core/agent-loop/src/index.ts:269`](../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:289`](../packages/core/agent-loop/src/index.ts)
 
 <a id="deepseek-aidsh-agent-presets"></a>
 
@@ -242,6 +247,8 @@ export interface Config {
   maxParallelToolCalls?: AgentLoopConfig['maxParallelToolCalls']
   /** Agent-loop cap for reasoning-only output-limit continuations; `0` disables recovery. */
   maxTokenContinuations?: AgentLoopConfig['maxTokenContinuations']
+  /** Agent-loop cumulative output-token cap for one reasoning-only continuation chain. */
+  maxTokenContinuationOutputTokens?: AgentLoopConfig['maxTokenContinuationOutputTokens']
   /** Whether the system prompt includes the fixed Harness identity (default true). */
   includeHarnessIdentity?: SystemPromptConfig['includeHarnessIdentity']
   /** Whether model history includes dynamic runtime-context snapshots (default true). */

@@ -11,7 +11,11 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import ToolRuntime, { defineContentToolFixture, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type PostToolDecision, type PreToolDecision } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
-import AgentLoop, { DEFAULT_MAX_PARALLEL_TOOL_CALLS, DEFAULT_MAX_TOKEN_CONTINUATIONS } from '@deepseek-ai/dsh-agent-loop'
+import AgentLoop, {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  DEFAULT_MAX_TOKEN_CONTINUATIONS,
+  DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS,
+} from '@deepseek-ai/dsh-agent-loop'
 import { MockAdapter, textResponse } from './mock-adapter.ts'
 import { CodeRuntime } from '@deepseek-ai/dsh-code-runtime'
 import type { CodeRunRequest, CodeRunResult } from '@deepseek-ai/dsh-code-runtime'
@@ -276,6 +280,12 @@ describe('tool-call scheduler: rolling pool honors maxParallelToolCalls', () => 
       .toThrow('maxTokenContinuations must be a non-negative integer')
     expect(() => new AgentLoop(new Context(), { agents: [], maxTokenContinuations: 1.5 }))
       .toThrow('maxTokenContinuations must be a non-negative integer')
+    expect(() => new AgentLoop(new Context(), { agents: [], maxTokenContinuationOutputTokens: 0 }))
+      .toThrow('maxTokenContinuationOutputTokens must be a positive safe integer')
+    expect(() => new AgentLoop(new Context(), {
+      agents: [],
+      maxTokenContinuationOutputTokens: Number.MAX_SAFE_INTEGER + 1,
+    })).toThrow('maxTokenContinuationOutputTokens must be a positive safe integer')
   })
 
   it('defaults the cap when direct construction bypasses the config schema', async () => {
@@ -289,6 +299,7 @@ describe('tool-call scheduler: rolling pool honors maxParallelToolCalls', () => 
     const loop = new AgentLoop(ctx, { agents: [] })
     expect(loop.config.maxParallelToolCalls).toBe(DEFAULT_MAX_PARALLEL_TOOL_CALLS)
     expect(loop.config.maxTokenContinuations).toBe(DEFAULT_MAX_TOKEN_CONTINUATIONS)
+    expect(loop.config.maxTokenContinuationOutputTokens).toBe(DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS)
     await ctx.fiber.dispose()
   })
 

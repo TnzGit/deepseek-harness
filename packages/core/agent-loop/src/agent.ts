@@ -37,7 +37,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { RuntimeContextProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
 import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
-import { reasoningOnlyMaxTokenFacts, withMaxTokenContinuation } from './max-token-continuation.ts'
+import {
+  reasoningOnlyMaxTokenFacts,
+  repeatsMaxTokenCheckpoint,
+  withMaxTokenContinuation,
+} from './max-token-continuation.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -51,7 +55,7 @@ type Phase =
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
 
-type StepResult = StepEndReason | { kind: 'continue-max-tokens' }
+type StepResult = StepEndReason | { kind: 'continue-max-tokens'; outputTokens: number }
 
 type PreparedStep =
   | { kind: 'reject' }
@@ -284,7 +288,10 @@ export class ReactLoopAgent implements Agent {
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
     let maxTokenContinuations = 0
+    let maxTokenContinuationOutputTokens = 0
     const maxTokenContinuationLimit = this.loopCtx.agentLoop.config.maxTokenContinuations
+    const maxTokenContinuationOutputTokenLimit = this.loopCtx.agentLoop.config
+      .maxTokenContinuationOutputTokens
     try {
       while (true) {
         signal.throwIfAborted()
@@ -314,9 +321,12 @@ export class ReactLoopAgent implements Agent {
             decision.assembly,
             maxTokenContinuations,
             maxTokenContinuationLimit,
+            maxTokenContinuationOutputTokens,
+            maxTokenContinuationOutputTokenLimit,
           )
           if (stepEnd?.kind === 'continue-max-tokens') {
             maxTokenContinuations += 1
+            maxTokenContinuationOutputTokens += stepEnd.outputTokens
             target = 'next-step'
             continue
           }
@@ -367,6 +377,8 @@ export class ReactLoopAgent implements Agent {
     assembly: PromptAssembly,
     maxTokenContinuations: number,
     maxTokenContinuationLimit: number,
+    maxTokenContinuationOutputTokens: number,
+    maxTokenContinuationOutputTokenLimit: number,
   ): Promise<StepResult | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
@@ -602,7 +614,18 @@ export class ReactLoopAgent implements Agent {
       )
       if (finish.kind === 'max-tokens') {
         const facts = reasoningOnlyMaxTokenFacts(message.content)
-        if (facts !== undefined && maxTokenContinuations < maxTokenContinuationLimit) {
+        const outputTokens = assembler.usage?.outputTokens ?? request.maxTokens
+        const cumulativeOutputTokens = outputTokens === undefined
+          ? undefined
+          : maxTokenContinuationOutputTokens + outputTokens
+        const repeatedCheckpoint = facts !== undefined
+          && repeatsMaxTokenCheckpoint(this.session.events, turn, message.content)
+        if (facts !== undefined
+          && !repeatedCheckpoint
+          && maxTokenContinuations < maxTokenContinuationLimit
+          && outputTokens !== undefined
+          && cumulativeOutputTokens !== undefined
+          && cumulativeOutputTokens <= maxTokenContinuationOutputTokenLimit) {
           const attempt = maxTokenContinuations + 1
           this.session.append('agent/max-token-continuation', {
             turn,
@@ -611,6 +634,7 @@ export class ReactLoopAgent implements Agent {
             attempt,
             ...facts,
             ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+            cumulativeOutputTokens,
           })
           this.loopCtx.logger.warn('agent "%s": automatically continuing reasoning-only max-tokens response: %o', this.id, {
             provider: request.provider,
@@ -620,10 +644,26 @@ export class ReactLoopAgent implements Agent {
             continuationStep: step + 1,
             attempt,
             maxTokenContinuationLimit,
+            maxTokenContinuationOutputTokenLimit,
             ...facts,
-            outputTokens: assembler.usage?.outputTokens,
+            outputTokens,
+            cumulativeOutputTokens,
           })
-          return { kind: 'continue-max-tokens' }
+          return { kind: 'continue-max-tokens', outputTokens }
+        }
+        if (facts !== undefined) {
+          this.loopCtx.logger.warn('agent "%s": reasoning-only max-tokens continuation stopped: %o', this.id, {
+            provider: request.provider,
+            model: request.model,
+            turn,
+            step,
+            attempts: maxTokenContinuations,
+            maxTokenContinuationLimit,
+            outputTokens,
+            cumulativeOutputTokens,
+            maxTokenContinuationOutputTokenLimit,
+            repeatedCheckpoint,
+          })
         }
         return {
           kind: 'max-tokens',

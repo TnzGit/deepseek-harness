@@ -97,7 +97,7 @@ function sessionEvents(records: readonly JsonObject[]): JsonObject[] {
 }
 
 describe('direct DeepSeek reasoning-only max-token continuation snapshot', () => {
-  it('continues once without changing thinking configuration', async () => {
+  it('continues from a hidden checkpoint without changing thinking configuration', async () => {
     const server = await continuationServer()
     try {
       const result = await runLoaderSmoke({
@@ -132,6 +132,8 @@ describe('direct DeepSeek reasoning-only max-token continuation snapshot', () =>
         thinking: server.requests.map(request => request.thinking),
         reasoningEffort: server.requests.map(request => request.reasoning_effort),
         maxTokens: server.requests.map(request => request.max_tokens),
+        checkpointRequests: requestJson.filter(text => text.includes('Internal reasoning checkpoint')).length,
+        checkpointContentRequests: requestJson.filter(text => text.includes('I am still working through the private analysis.')).length,
         recoveryPromptRequests: requestJson.filter(text => text.includes('without restarting the analysis')).length,
         continuationEvents: events.filter(event => event.type === 'agent/max-token-continuation').length,
         stepStarts: events.filter(event => event.type === 'step/start').length,
@@ -141,6 +143,8 @@ describe('direct DeepSeek reasoning-only max-token continuation snapshot', () =>
 
       expect(projection).toMatchInlineSnapshot(`
         {
+          "checkpointContentRequests": 1,
+          "checkpointRequests": 1,
           "continuationEvents": 1,
           "finalOutput": "AUTOMATIC CONTINUATION COMPLETE",
           "maxTokens": [

@@ -96,6 +96,8 @@ export interface Config {
   maxParallelToolCalls?: AgentLoopConfig['maxParallelToolCalls']
   /** Agent-loop cap for reasoning-only output-limit continuations; `0` disables recovery. */
   maxTokenContinuations?: AgentLoopConfig['maxTokenContinuations']
+  /** Agent-loop cumulative output-token cap for one reasoning-only continuation chain. */
+  maxTokenContinuationOutputTokens?: AgentLoopConfig['maxTokenContinuationOutputTokens']
   /** Whether the system prompt includes the fixed Harness identity (default true). */
   includeHarnessIdentity?: SystemPromptConfig['includeHarnessIdentity']
   /** Whether model history includes dynamic runtime-context snapshots (default true). */
@@ -185,6 +187,9 @@ export function pickSpineConfig(config: Omit<Config, 'agents'>): Omit<Config, 'a
   return {
     ...config.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: config.maxParallelToolCalls } : {},
     ...config.maxTokenContinuations !== undefined ? { maxTokenContinuations: config.maxTokenContinuations } : {},
+    ...config.maxTokenContinuationOutputTokens !== undefined
+      ? { maxTokenContinuationOutputTokens: config.maxTokenContinuationOutputTokens }
+      : {},
     ...config.includeHarnessIdentity !== undefined ? { includeHarnessIdentity: config.includeHarnessIdentity } : {},
     ...config.includeRuntimeContext !== undefined ? { includeRuntimeContext: config.includeRuntimeContext } : {},
     ...config.persona !== undefined ? { persona: config.persona } : {},
@@ -265,5 +270,8 @@ export function apply(ctx: Context, config: Config): void {
     agents: config.agents ?? [],
     ...config.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: config.maxParallelToolCalls } : {},
     ...config.maxTokenContinuations !== undefined ? { maxTokenContinuations: config.maxTokenContinuations } : {},
+    ...config.maxTokenContinuationOutputTokens !== undefined
+      ? { maxTokenContinuationOutputTokens: config.maxTokenContinuationOutputTokens }
+      : {},
   })
 }

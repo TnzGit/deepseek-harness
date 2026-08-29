@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-29-reasoning-only-max-token-continuation.md
-2026-08-29-reasoning-only-max-token-continuation.md: de1bfbe94ecec1be8043f0506be9f78b94048f45
-2026-08-29-reasoning-only-max-token-continuation.zh.md: 747ac524d14381a63a8bc5859ce34981a0209628
+2026-08-29-reasoning-only-max-token-continuation.md: d6a575a6fa339278b3be40ee07e51785b7e71ad1
+2026-08-29-reasoning-only-max-token-continuation.zh.md: 35adde49591622855c791a76abbd5131d5a73b15

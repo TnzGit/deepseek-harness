@@ -78,7 +78,7 @@ turn/start
      append entered messages as user/message
      derive model history from the log
      agent/request -> llm/stream -> assistant/chunk* -> assistant/message
-     reasoning-only max-tokens + remaining continuation budget -> durable recovery prompt -> next step
+     reasoning-only max-tokens + remaining count/token budget -> hidden assistant checkpoint + recovery prompt -> next step
      tool/call* -> tools/pre-execute -> tools/execute -> tools/post-execute -> tool/result*
      step/end
      tools owe another request, or next-step input arrived -> claim -> next step
@@ -92,7 +92,7 @@ turn/end
 
 `agent/pre-step` 决定模型看到什么。监听器可以改写已领取的消息，也可以直接拒绝它们；首次领取被拒绝或被改写为空时，仍会关闭一个不含步骤的持久轮次，因此日志会记录这次尝试。每个步骤读取插件注册的提示词片段和工具 schema。
 
-当提供方请求成功到达 `max-tokens`，且只产出私有推理、没有可见回答或工具调用时，循环可以在同一轮次内打开一个新步骤继续。循环会先提交这段推理和持久化的 `agent/max-token-continuation` 事件；随后，请求重建只为这个续跑步骤追加由该事件拥有的内部恢复提示。`maxTokenContinuations` 有界设置默认为一次，并在下一轮次生效。恢复请求走普通请求路径，保留路由实际生效的 thinking、reasoning effort 与输出上限。预算耗尽时，会产生带 `autoContinuation: 'exhausted'` 标记的普通 `max-tokens` 轮次结束；存在可见部分回答或工具调用时绝不会自动重放。
+当提供方请求成功到达 `max-tokens`，且只产出私有推理、没有可见回答或工具调用时，循环可以在同一轮次内打开一个新步骤继续。循环会先提交这段推理和持久化的 `agent/max-token-continuation` 事件。请求重建会把该截断推理消息替换为模型可重放、界面不展示的内部 assistant 文本 checkpoint，再追加事件拥有的恢复提示；若压缩已遮蔽源消息，则保留压缩后的 checkpoint，不复活完整推理。`maxTokenContinuations` 默认允许四次续跑，`maxTokenContinuationOutputTokens` 默认将截断响应的累计输出限制为 163840 token；checkpoint 完全重复时也会停止恢复。这些实时设置在下一轮次生效。恢复请求走普通请求路径，保留路由实际生效的 thinking、reasoning effort 与输出上限。保护条件耗尽时，会产生带 `autoContinuation: 'exhausted'` 标记的普通 `max-tokens` 轮次结束；存在可见部分回答或工具调用时绝不会自动重放。
 
 详情见[时序图](agent-lifecycle.zh.md)、[工具流水线](tool-execution-pipeline.zh.md)和[取消与错误恢复](subsystems/core.zh.md#the-agent-handle)。
 

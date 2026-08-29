@@ -8,20 +8,29 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { withDegenerateRecovery } from '../src/degenerate-response.ts'
+import {
+  reasoningOnlyMaxTokenFacts,
+  repeatsMaxTokenCheckpoint,
+  withMaxTokenContinuation,
+} from '../src/max-token-continuation.ts'
 import { MockAdapter, maxTokensResponse, reasoningMaxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 function driverDone(agent: Agent): Promise<void> {
   return (agent as Agent & { done: Promise<void> }).done
 }
 
-async function harness(adapter: MockAdapter, persona = '') {
+async function harness(
+  adapter: MockAdapter,
+  persona = '',
+  loopConfig: { maxTokenContinuations?: number; maxTokenContinuationOutputTokens?: number } = {},
+) {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt, { persona })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: [], ...loopConfig })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }
@@ -1129,6 +1138,16 @@ describe('agent loop', () => {
 
     expect(adapter.requests).toHaveLength(2)
     expect(adapter.requests.map(request => request.reasoningEffort)).toEqual([effort, effort])
+    expect(adapter.requests[1]?.messages.at(-2)).toMatchObject({
+      role: 'assistant',
+      source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
+      content: [{
+        type: 'text',
+        text: expect.stringContaining('analysis in progress') as unknown,
+      }],
+    })
+    expect(adapter.requests[1]?.messages.some(message => message.content.some(block =>
+      block.type === 'reasoning' && block.text === 'analysis in progress'))).toBe(false)
     expect(adapter.requests[1]?.messages.at(-1)).toMatchObject({
       role: 'user',
       source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
@@ -1143,9 +1162,46 @@ describe('agent loop', () => {
           attempt: 1,
           reasoningCharacters: 20,
           outputTokens: 20,
+          cumulativeOutputTokens: 20,
         },
       }])
     expect(agent.session.deriveMessages().some(message => message.source.kind === 'plugin')).toBe(false)
+    const derived = agent.session.deriveMessages()
+    expect(reasoningOnlyMaxTokenFacts([{
+      type: 'tool-call',
+      id: CallId('checkpoint-tool'),
+      name: 'noop',
+      arguments: '{}',
+    }])).toBeUndefined()
+    expect(withMaxTokenContinuation(
+      agent.session.events.filter(event => event.type !== 'step/start'),
+      derived,
+    )).toEqual(derived)
+    expect(repeatsMaxTokenCheckpoint(
+      agent.session.events.filter(event => event.type !== 'assistant/message'),
+      1,
+      [{ type: 'reasoning', text: 'analysis in progress' }],
+    )).toBe(false)
+    const capped = derived.find(message => message.content.some(block =>
+      block.type === 'reasoning' && block.text === 'analysis in progress'))
+    expect(capped).toBeDefined()
+    const compacted = derived.filter(message => message.id !== capped?.id)
+    const compactedProjection = withMaxTokenContinuation(agent.session.events, compacted)
+    expect(compactedProjection).toEqual([
+      ...compacted,
+      expect.objectContaining({
+        role: 'user',
+        source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
+      }),
+    ])
+    const missingSourceProjection = withMaxTokenContinuation(
+      agent.session.events.filter(event => event.type !== 'assistant/message' || event.data.step !== 1),
+      compacted,
+    )
+    expect(missingSourceProjection.at(-1)).toMatchObject({
+      role: 'user',
+      source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
+    })
     const turnEnd = agent.session.events.findLast(event => event.type === 'turn/end')
     expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toEqual({ kind: 'completed' })
   })
@@ -1154,6 +1210,70 @@ describe('agent loop', () => {
     const adapter = new MockAdapter([
       reasoningMaxTokensResponse('first analysis'),
       reasoningMaxTokensResponse('continued analysis'),
+      reasoningMaxTokensResponse('third analysis'),
+      reasoningMaxTokensResponse('fourth analysis'),
+      reasoningMaxTokensResponse('fifth analysis'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(5)
+    const turnEnd = agent.session.events.findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toEqual({
+      kind: 'max-tokens',
+      autoContinuation: 'exhausted',
+    })
+  })
+
+  it('stops a reasoning-only continuation chain at its cumulative output-token budget', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('first analysis'),
+      reasoningMaxTokensResponse('continued analysis'),
+      reasoningMaxTokensResponse('must not be requested'),
+    ])
+    const ctx = await harness(adapter, '', {
+      maxTokenContinuations: 4,
+      maxTokenContinuationOutputTokens: 28,
+    })
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    const turnEnd = agent.session.events.findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toEqual({
+      kind: 'max-tokens',
+      autoContinuation: 'exhausted',
+    })
+  })
+
+  it('uses the request cap as the continuation budget fallback when usage is absent', async () => {
+    const adapter = new MockAdapter([[
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: 'analysis without usage' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'analysis without usage' } },
+      { type: 'finish', reason: { kind: 'max-tokens' } },
+    ], textResponse('finished answer')], undefined, 16)
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.events.filter(event => event.type === 'agent/max-token-continuation'))
+      .toMatchObject([{ data: { cumulativeOutputTokens: 16 } }])
+  })
+
+  it('stops when a continuation exactly repeats its checkpoint', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('same stalled analysis'),
+      reasoningMaxTokensResponse('same stalled analysis'),
+      reasoningMaxTokensResponse('must not be requested'),
     ])
     const ctx = await harness(adapter)
     const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })

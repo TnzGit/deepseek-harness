@@ -48,15 +48,18 @@ describe('agent-loop settings section', () => {
   it('layers the stored parallel cap over the composition entry', async () => {
     const bench = await boot()
     expect(bench.ctx.agentLoop.config.maxParallelToolCalls).toBe(4)
-    expect(bench.ctx.agentLoop.config.maxTokenContinuations).toBe(1)
+    expect(bench.ctx.agentLoop.config.maxTokenContinuations).toBe(4)
+    expect(bench.ctx.agentLoop.config.maxTokenContinuationOutputTokens).toBe(163_840)
 
     await bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, {
       maxParallelToolCalls: 1,
       maxTokenContinuations: 0,
+      maxTokenContinuationOutputTokens: 65_536,
     })
 
     expect(bench.ctx.agentLoop.config.maxParallelToolCalls).toBe(1)
     expect(bench.ctx.agentLoop.config.maxTokenContinuations).toBe(0)
+    expect(bench.ctx.agentLoop.config.maxTokenContinuationOutputTokens).toBe(65_536)
     await bench.ctx.fiber.dispose()
   })
 
@@ -67,6 +70,12 @@ describe('agent-loop settings section', () => {
       .rejects.toThrow()
 
     expect(bench.ctx.agentLoop.config.maxParallelToolCalls).toBe(4)
+
+    await expect(bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, {
+      maxTokenContinuationOutputTokens: 0,
+    })).rejects.toThrow()
+
+    expect(bench.ctx.agentLoop.config.maxTokenContinuationOutputTokens).toBe(163_840)
     await bench.ctx.fiber.dispose()
   })
 
@@ -78,6 +87,7 @@ describe('agent-loop settings section', () => {
     expect(Object.keys(descriptor?.value as object)).toEqual([
       'maxParallelToolCalls',
       'maxTokenContinuations',
+      'maxTokenContinuationOutputTokens',
     ])
     await bench.ctx.fiber.dispose()
   })

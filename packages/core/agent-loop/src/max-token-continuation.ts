@@ -21,6 +21,7 @@ export interface MaxTokenContinuationEventData {
   attempt: number
   reasoningCharacters: number
   outputTokens?: number
+  cumulativeOutputTokens?: number
 }
 
 /** Facts proving that a capped response carried private reasoning but no deliverable action. */
@@ -28,7 +29,16 @@ export interface ReasoningOnlyMaxTokenFacts {
   reasoningCharacters: number
 }
 
-const RECOVERY_PROMPT = 'The previous response reached its output-token limit after producing only private reasoning. Continue from that reasoning without restarting the analysis, then produce the requested final answer or the next necessary tool call.'
+const CHECKPOINT_PREFIX = 'Internal reasoning checkpoint from the preceding capped response. Continue this work; do not treat it as a final answer.\n\n'
+const RECOVERY_PROMPT = 'Continue from the internal reasoning checkpoint without restarting the analysis. Produce the requested final answer or the next necessary tool call as soon as the next concrete action is ready.'
+
+function reasoningText(content: readonly ContentBlock[]): string {
+  return content
+    .filter(block => block.type === 'reasoning')
+    .map(block => block.text)
+    .join('')
+    .trim()
+}
 
 /**
  * Detect a capped response that contains reasoning but no visible answer or tool call.
@@ -40,12 +50,17 @@ export function reasoningOnlyMaxTokenFacts(
 ): ReasoningOnlyMaxTokenFacts | undefined {
   if (content.some(block => block.type === 'tool-call')) return
   if (content.some(block => block.type === 'text' && block.text.trim() !== '')) return
-  const reasoningCharacters = Array.from(content
-    .filter(block => block.type === 'reasoning')
-    .map(block => block.text)
-    .join('')
-    .trim()).length
+  const reasoningCharacters = Array.from(reasoningText(content)).length
   return reasoningCharacters === 0 ? undefined : { reasoningCharacters }
+}
+
+function checkpointMessage(turn: number, step: number, reasoning: string): Message {
+  return freezeMessage({
+    id: MessageId(`agent-loop-max-token-checkpoint:${turn}:${step}`),
+    role: 'assistant',
+    content: [{ type: 'text', text: CHECKPOINT_PREFIX + reasoning }],
+    source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
+  })
 }
 
 function recoveryMessage(turn: number, step: number): Message {
@@ -57,11 +72,28 @@ function recoveryMessage(turn: number, step: number): Message {
   })
 }
 
+/** Return whether the current capped reasoning exactly repeats the preceding continuation checkpoint. */
+export function repeatsMaxTokenCheckpoint(
+  events: readonly SessionEvent[],
+  turn: number,
+  content: readonly ContentBlock[],
+): boolean {
+  const continuation = events.findLast(event => event.type === 'agent/max-token-continuation'
+    && event.data.turn === turn)
+  if (continuation?.type !== 'agent/max-token-continuation') return false
+  const previous = events.findLast(event => event.type === 'assistant/message'
+    && event.data.turn === turn
+    && event.data.step === continuation.data.step)
+  if (previous?.type !== 'assistant/message') return false
+  const currentReasoning = reasoningText(content)
+  return currentReasoning !== '' && currentReasoning === reasoningText(previous.data.message.content)
+}
+
 /**
  * Reconstruct the internal prompt for the exact continuation step named by the durable event.
  * @param events - complete durable session events.
  * @param messages - ordinary derived model history.
- * @returns history plus the one pending continuation prompt when applicable.
+ * @returns history with the capped reasoning replaced by a replayable checkpoint plus the pending prompt.
  */
 export function withMaxTokenContinuation(
   events: readonly SessionEvent[],
@@ -75,5 +107,22 @@ export function withMaxTokenContinuation(
     || continuation.data.continuationStep !== step.data.step) {
     return [...messages]
   }
-  return [...messages, recoveryMessage(step.data.turn, step.data.step)]
+  const source = events.findLast(event => event.type === 'assistant/message'
+    && event.data.turn === continuation.data.turn
+    && event.data.step === continuation.data.step)
+  if (source?.type !== 'assistant/message') {
+    return [...messages, recoveryMessage(step.data.turn, step.data.step)]
+  }
+  const sourceIndex = messages.findIndex(message => message.id === source.data.message.id)
+  if (sourceIndex < 0) {
+    // Pressure compaction already replaced the capped response with its summary.
+    return [...messages, recoveryMessage(step.data.turn, step.data.step)]
+  }
+  const reasoning = reasoningText(source.data.message.content)
+  return [
+    ...messages.slice(0, sourceIndex),
+    checkpointMessage(step.data.turn, step.data.step, reasoning),
+    ...messages.slice(sourceIndex + 1),
+    recoveryMessage(step.data.turn, step.data.step),
+  ]
 }
