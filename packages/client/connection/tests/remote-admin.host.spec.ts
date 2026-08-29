@@ -61,15 +61,15 @@ async function mounted(allowRemoteAdmin: boolean): Promise<{ route: WebRoute; di
 
 describe('trusted LAN remote admin', () => {
   it('keeps remote administration disabled by default', async () => {
-    const { route, dispose } = await mounted(false)
+    const mountedRoute = await mounted(false)
     const result = fakeResponse()
-    await route.handler(fakeRequest('settings.describe'), result.response)
+    await mountedRoute.route.handler(fakeRequest('settings.describe'), result.response)
     expect(result.status()).toBe(403)
-    await dispose()
+    await mountedRoute.dispose()
   })
 
   it('admits configuration-plane methods while keeping Host desktop actions loopback-only', async () => {
-    const { route, dispose } = await mounted(true)
+    const mountedRoute = await mounted(true)
     for (const method of [
       'settings.describe', 'settings.update', 'settings.replace', 'settings.mutate',
       'credentials.describe', 'credentials.set', 'credentials.unset',
@@ -77,16 +77,16 @@ describe('trusted LAN remote admin', () => {
       'agentPreset.read', 'agentPreset.copy', 'agentPreset.remove',
     ]) {
       const result = fakeResponse()
-      await route.handler(fakeRequest(method), result.response)
+      await mountedRoute.route.handler(fakeRequest(method), result.response)
       expect(result.status(), method).not.toBe(403)
     }
     for (const method of [
       'host.pickDirectory', 'host.openPath', 'settings.openDocument', 'agentPreset.openDocument',
     ]) {
       const result = fakeResponse()
-      await route.handler(fakeRequest(method), result.response)
+      await mountedRoute.route.handler(fakeRequest(method), result.response)
       expect(result.status(), method).toBe(403)
     }
-    await dispose()
+    await mountedRoute.dispose()
   })
 })

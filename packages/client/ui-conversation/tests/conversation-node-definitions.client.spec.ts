@@ -950,7 +950,9 @@ describe('built-in conversation node Definitions', () => {
       at(5, 'turn/end', { turn: 1, reason: { kind: 'max-tokens' } }),
     ])
     const notice = node(snapshot(value), 'turn-max-tokens')
-    expect(notice?.data).toMatchObject({ kind: 'turn-max-tokens', seq: 5, turn: 1, step: 1 })
+    expect(notice?.data).toMatchObject({
+      kind: 'turn-max-tokens', seq: 5, turn: 1, step: 1, autoContinuationExhausted: false,
+    })
     expect(node(snapshot(value), 'turn-error')).toBeUndefined()
     // The tail stays the turn's last node so its branch action survives; the
     // notice slots between the truncated closing Assistant and the tail.
@@ -977,10 +979,15 @@ describe('built-in conversation node Definitions', () => {
 
   it('keeps the max-tokens notice when the window starts after the owning turn/start', () => {
     const value = assembler([
-      at(9, 'turn/end', { turn: 3, reason: { kind: 'max-tokens' } }),
+      at(9, 'turn/end', {
+        turn: 3,
+        reason: { kind: 'max-tokens', autoContinuation: 'exhausted' },
+      }),
     ], true)
     const notice = node(snapshot(value), 'turn-max-tokens')
-    expect(notice?.data).toMatchObject({ kind: 'turn-max-tokens', seq: 9, turn: 3 })
+    expect(notice?.data).toMatchObject({
+      kind: 'turn-max-tokens', seq: 9, turn: 3, autoContinuationExhausted: true,
+    })
   })
 
   it('pins the max-tokens Definition edges the engine cannot reach', () => {
@@ -1000,7 +1007,7 @@ describe('built-in conversation node Definitions', () => {
 
     expect(() => turnMaxTokensDefinition.start(context(undefined), match(1, 'turn/start', { turn: 1 }), reader))
       .toThrow('turn-max-tokens start requires a max-tokens turn/end')
-    const state = { turn: 1, seq: 5, time: 5_000 }
+    const state = { turn: 1, seq: 5, time: 5_000, autoContinuationExhausted: false }
     expect(turnMaxTokensDefinition.update(
       context(state) as Parameters<typeof turnMaxTokensDefinition.update>[0],
       match(6, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),

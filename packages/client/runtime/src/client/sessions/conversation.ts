@@ -182,6 +182,8 @@ export interface TurnMaxTokensNode {
   time: number
   turn: number
   step: number
+  /** The bounded reasoning-only automatic continuation also reached the cap. */
+  autoContinuationExhausted: boolean
 }
 
 /** A tool result paired (when in-window) with its call head. */

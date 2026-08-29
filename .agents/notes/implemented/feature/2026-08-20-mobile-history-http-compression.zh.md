@@ -2,6 +2,8 @@
 
 Status: implemented
 
+[English](2026-08-20-mobile-history-http-compression.md) | 中文
+
 ## Problem
 
 浏览器客户端此前无论视口大小，打开对话时都会先取相同的 50 条消息历史。手机首屏因此要为大量暂时看不到的 Conversation 事件与渲染节点付出成本，而长 assistant 流会让一条逻辑消息包含数百甚至数千个原始事件。Unary JSON API 响应即使浏览器声明支持 Brotli 或 gzip，也不会压缩发送。
@@ -15,6 +17,12 @@ Status: implemented
 初次打开、重连重建和 gap repair 共用同一套移动端尾页策略，因此这些路径不会悄悄把手机首屏重新扩大成桌面尺寸。
 
 在 node:http bridge 上，当请求的 `Accept-Encoding` 允许时，大于 1 KiB 的 JSON 响应会压缩。Brotli 的 quality 不低于 gzip 时优先 Brotli，否则使用 gzip。已有 `Content-Encoding` 会保留；压缩响应设置 `Content-Length` 并在 `Vary` 中加入 `Accept-Encoding`；小型 JSON 保持不压缩。非 JSON 与流式响应继续使用现有增量路径，因此 SSE 不会仅为了压缩而被整体缓冲。
+
+## Alternatives considered
+
+**即使会切开逻辑消息，也对原始事件数设置硬上限。** 不采用，因为回放与工具调用完整性要求返回完整的 append-origin 分组。
+
+**同时缓冲并压缩 SSE 响应。** 不采用，因为这会破坏增量传输并增加首段可见输出时间；压缩仅用于已经完成的 unary JSON 响应体。
 
 ## Verification
 

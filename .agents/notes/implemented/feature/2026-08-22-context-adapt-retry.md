@@ -6,7 +6,7 @@ English | [中文](2026-08-22-context-adapt-retry.zh.md)
 
 ## Problem
 
-A request can fail its provider's context-window check because of the requested completion reservation, not the conversation itself: 95233 prompt tokens plus a 32768 output cap against a 128000-token window overflows by a single token. The existing recovery for `CONTEXT_WINDOW_EXCEEDED` is compaction ([compaction-basic's overflow path](../../../packages/compaction/compaction-basic/README.md)) — heavyweight for this shape, slow, and it still hard-fails when compaction cannot shrink enough or its retries run out.
+A request can fail its provider's context-window check because of the requested completion reservation, not the conversation itself: 95233 prompt tokens plus a 32768 output cap against a 128000-token window overflows by a single token. The existing recovery for `CONTEXT_WINDOW_EXCEEDED` is compaction ([compaction-basic's overflow path](../../../../packages/compaction/compaction-basic/README.md)) — heavyweight for this shape, slow, and it still hard-fails when compaction cannot shrink enough or its retries run out.
 
 ## Decision
 

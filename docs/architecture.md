@@ -74,6 +74,7 @@ turn/start
      append entered messages as user/message
      derive model history from the log
      agent/request -> llm/stream -> assistant/chunk* -> assistant/message
+     reasoning-only max-tokens + remaining continuation budget -> durable recovery prompt -> next step
      tool/call* -> tools/pre-execute -> tools/execute -> tools/post-execute -> tool/result*
      step/end
      tools owe another request, or next-step input arrived -> claim -> next step
@@ -86,6 +87,8 @@ turn/end
 Input reaches the driver through one inbox. Some messages wake it immediately; injected context waits in the inbox until another message does.
 
 `agent/pre-step` decides what the model sees. Listeners may rewrite the claimed messages or reject them outright; a rejected or empty first claim still closes a durable turn that spent no step, so the log records the attempt. Each step reads the prompt sections and tool schemas that plugins registered.
+
+When a successful provider request reaches `max-tokens` after producing only private reasoning, with no visible answer or tool call, the loop may continue the same turn in a new step. It first commits the reasoning and a durable `agent/max-token-continuation` event; request reconstruction then appends the event-owned internal recovery prompt for exactly that continuation step. The bounded `maxTokenContinuations` setting defaults to one and applies at the next turn. The recovery request uses the normal request path and preserves the route's effective thinking, reasoning effort, and output cap. Exhausting the bound produces a normal `max-tokens` turn ending marked `autoContinuation: 'exhausted'`; visible partial answers and tool calls are never auto-replayed.
 
 Details: the [sequence diagram](agent-lifecycle.md), the [tool pipeline](tool-execution-pipeline.md), and [cancellation and error recovery](subsystems/core.md#the-agent-handle).
 

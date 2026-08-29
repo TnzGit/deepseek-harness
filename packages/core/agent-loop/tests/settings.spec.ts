@@ -48,10 +48,15 @@ describe('agent-loop settings section', () => {
   it('layers the stored parallel cap over the composition entry', async () => {
     const bench = await boot()
     expect(bench.ctx.agentLoop.config.maxParallelToolCalls).toBe(4)
+    expect(bench.ctx.agentLoop.config.maxTokenContinuations).toBe(1)
 
-    await bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, { maxParallelToolCalls: 1 })
+    await bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, {
+      maxParallelToolCalls: 1,
+      maxTokenContinuations: 0,
+    })
 
     expect(bench.ctx.agentLoop.config.maxParallelToolCalls).toBe(1)
+    expect(bench.ctx.agentLoop.config.maxTokenContinuations).toBe(0)
     await bench.ctx.fiber.dispose()
   })
 
@@ -70,7 +75,10 @@ describe('agent-loop settings section', () => {
 
     const descriptor = bench.ctx.settings.describe().find(row => String(row.ns) === 'agent-loop')
 
-    expect(Object.keys(descriptor?.value as object)).toEqual(['maxParallelToolCalls'])
+    expect(Object.keys(descriptor?.value as object)).toEqual([
+      'maxParallelToolCalls',
+      'maxTokenContinuations',
+    ])
     await bench.ctx.fiber.dispose()
   })
 

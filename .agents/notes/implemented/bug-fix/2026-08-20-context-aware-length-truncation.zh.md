@@ -2,6 +2,8 @@
 
 Status: implemented
 
+[English](2026-08-20-context-aware-length-truncation.md) | 中文
+
 ## Problem
 
 OpenAI 兼容推理服务可能会针对两种本质不同的终止条件都返回 `finish_reason: "length"`：请求确实耗尽了自己申请的输出预算，或者提示历史已经占据模型上下文窗口的大部分空间，服务端因此缩小了本次请求的实际生成预算。vLLM 一类服务在把生成长度裁到剩余上下文容量后，仍可能对两种情况返回相同的 `length`。

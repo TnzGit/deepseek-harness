@@ -6,7 +6,7 @@
 
 ## 问题
 
-一次请求可能不是因为对话本身、而是因为申请的补全预留撞上提供方的上下文窗口检查：95233 提示词 token 加 32768 输出上限，对 128000 的窗口只溢出 1 个 token。`CONTEXT_WINDOW_EXCEEDED` 的既有恢复手段是压缩（[compaction-basic 的溢出路径](../../../packages/compaction/compaction-basic/README.md)）——对这种形态是杀鸡用牛刀，慢，而且当压缩压得不够或重试耗尽时依旧硬失败。
+一次请求可能不是因为对话本身、而是因为申请的补全预留撞上提供方的上下文窗口检查：95233 提示词 token 加 32768 输出上限，对 128000 的窗口只溢出 1 个 token。`CONTEXT_WINDOW_EXCEEDED` 的既有恢复手段是压缩（[compaction-basic 的溢出路径](../../../../packages/compaction/compaction-basic/README.zh.md)）——对这种形态是杀鸡用牛刀，慢，而且当压缩压得不够或重试耗尽时依旧硬失败。
 
 ## 决策
 

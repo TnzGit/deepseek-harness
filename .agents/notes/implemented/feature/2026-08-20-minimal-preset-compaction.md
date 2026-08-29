@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-minimal-preset-compaction.zh.md)
+
 ## Problem
 
 The shipped `minimal` preset deliberately narrows the model-facing tool catalog to a persistent shell plus `str_replace_editor`, but it previously narrowed away the context-maintenance capabilities as well. Long minimal sessions therefore lacked automatic pressure compaction, a local `/compact` command, and the model-free large tool-result pruning available to the standard coding composition.
@@ -13,6 +15,12 @@ The minimal preset now mounts an independent agent-local `compaction` group with
 `compaction-basic` keeps its normal automatic pressure and context-overflow recovery behavior. `/compact` is the existing local command and therefore appears in the minimal slash catalog. The tool-result pruner uses the same explicit limits as the standard preset: results longer than 8192 characters are replaced with a 4096-character head plus a 1024-character tail. The token meter remains host-owned; the local group contains only the capabilities that must follow the selected agent preset.
 
 This does not widen the model tool schema. The minimal model still sees only its persistent shell and `str_replace_editor`; compaction remains a session-maintenance and command capability.
+
+## Alternatives considered
+
+**Tell minimal users to switch to the standard preset for long sessions.** Rejected because it widens the model-facing tool catalog and discards the purpose of a minimal coding mode.
+
+**Expose compaction as another model-facing tool.** Rejected because pressure maintenance and `/compact` are host/session capabilities; adding a tool would spend schema tokens without improving automatic recovery.
 
 ## Verification
 

@@ -49,7 +49,6 @@ describe('assembled duplicate tool call id snapshot', () => {
         configPath,
         binArgs: [configPath, 'trigger the deterministic duplicate tool-call stream'],
         tsconfigPath,
-        expectedExitCode: 1,
         env: {
           DEEPSEEK_API_KEY: 'snapshot-key',
           DSH_SNAPSHOT_BASE_URL: server.url,
@@ -58,11 +57,12 @@ describe('assembled duplicate tool call id snapshot', () => {
         },
       })
 
-      expect(result.stderr).toContain('provider reused tool call id "dup-call"')
+      expect(result.stderr).toBe('')
       const events = parseJsonl(result.stdout)
         .filter(record => record.type === 'session_event')
         .map(record => record.event as JsonObject)
-      const starts = events.filter(event => {
+      expect(JSON.stringify(events)).toContain('DUPLICATE_TOOL_CALL_ID')
+      const starts = events.filter((event) => {
         if (event.type !== 'assistant/chunk') return false
         const data = event.data as JsonObject
         const chunk = data.chunk as JsonObject

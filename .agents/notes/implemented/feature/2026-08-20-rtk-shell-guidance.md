@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-rtk-shell-guidance.zh.md)
+
 ## Problem
 
 A local DSH installation may provide Rust Token Killer (`rtk`) as a compact-output wrapper for common repository inspection commands. Installing RTK hooks or running `rtk init` from the model, however, changes shared Git/tool behavior outside the current DSH call and can affect other agents such as Codex. The desired optimization is therefore request guidance, not environment installation.
@@ -13,6 +15,12 @@ The model-facing bash prompt now tells the agent to prefer `rtk grep`, `rtk find
 The same prompt explicitly forbids `rtk init`, RTK hook installation, and any other Git/tool-hook mutation. DSH treats RTK only as an explicit command wrapper. The minimal preset has a complete persona, so its persistent-bash description carries the same rules rather than relying on the ordinary `tool:bash` prompt section.
 
 No executable discovery, installer, hook, or automatic command rewriting is added. A deployment without RTK continues to use native commands normally.
+
+## Alternatives considered
+
+**Run `rtk init` or install hooks for DSH.** Rejected because those mutations affect shared repositories and other agents, exceeding a model request's authority.
+
+**Automatically rewrite every supported native command through RTK.** Rejected because some tasks require exact machine-readable output and some deployments do not have RTK; explicit guidance preserves both fallbacks.
 
 ## Verification
 

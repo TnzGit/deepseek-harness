@@ -1,0 +1,31 @@
+# Direct-DeepSeek reasoning-only output-cap continuation composition.
+- id: base
+  name: '@deepseek-ai/cordis-plugin-include'
+  config:
+    path: ./cordis.yml
+    patches:
+      - id: llm-deepseek
+        config:
+          baseURL: !!js process.env.DSH_SNAPSHOT_BASE_URL
+          maxTokens: 32
+          thinking: enabled
+          reasoningEffort: max
+          models:
+            - id: deepseek-v4-flash
+              contextWindow: 128000
+              maxTokens: 32
+      - id: agent-loop
+        config:
+          maxTokenContinuations: 1
+      - id: agent-spine
+        config:
+          agents:
+            - id: main
+              provider: deepseek-official
+              model: deepseek-v4-flash
+              cwd: !!js process.cwd()
+          workspaceContext: false
+          persona: 'Reasoning-only output-cap automatic-continuation snapshot.'
+      - id: persistence
+        config:
+          root: './.sessions'

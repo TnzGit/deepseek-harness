@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-mobile-history-http-compression.zh.md)
+
 ## Problem
 
 The browser client previously opened every conversation with the same 50-message history page regardless of viewport. On phones that makes first paint pay for far more Conversation events and rendered nodes than are immediately visible, and long assistant streams can make one logical message contain hundreds or thousands of raw events. Unary JSON API responses were also sent uncompressed even when the browser advertised Brotli or gzip support.
@@ -15,6 +17,12 @@ Desktop history keeps the existing 50-message tail and older-page size. A compac
 The same mobile tail policy is used for initial open, reconnect rebuild, and gap repair so those paths cannot silently re-expand the first window to desktop size.
 
 At the node:http bridge, JSON responses larger than 1 KiB are compressed when the request's `Accept-Encoding` permits it. Brotli is preferred when its quality is at least gzip's; otherwise gzip is used. Existing `Content-Encoding` is preserved, compressed responses set `Content-Length` and vary on `Accept-Encoding`, and small JSON stays uncompressed. Non-JSON and streaming responses remain on the existing incremental path, so SSE is never buffered merely for compression.
+
+## Alternatives considered
+
+**Hard-cap the raw event count even when it splits a logical message.** Rejected because replay and tool-call integrity require complete append-origin groups.
+
+**Buffer and compress SSE responses too.** Rejected because it would destroy incremental delivery and increase time to first visible output; compression is limited to completed unary JSON bodies.
 
 ## Verification
 

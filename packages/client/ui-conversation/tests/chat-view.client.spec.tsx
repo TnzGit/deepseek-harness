@@ -108,8 +108,9 @@ const turnError = (seq: number, code?: string): TurnErrorNode => ({
   message: seq === 2 ? 'API key is invalid' : 'plugin exploded',
   ...(code === undefined ? {} : { code }),
 })
-const turnMaxTokens = (seq: number): TurnMaxTokensNode => ({
+const turnMaxTokens = (seq: number, autoContinuationExhausted = false): TurnMaxTokensNode => ({
   kind: 'turn-max-tokens', seq, time: seq * 1_000, turn: 1, step: 0,
+  autoContinuationExhausted,
 })
 const toolResult = (seq: number, callId: string, name = 'bash'): ToolResultNode => ({
   kind: 'tool-result', seq, time: seq * 1_000, callId,
@@ -598,6 +599,16 @@ describe('ChatView', () => {
       '已达到输出 token 上限回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。',
     ])
     expect(view.queryByText('本轮运行失败')).toBeNull()
+  })
+
+  it('explains when the bounded automatic max-tokens continuation is exhausted', () => {
+    const h = makeHarness({
+      nodes: [user(1, 'try'), assistant(2, 'truncated'), turnMaxTokens(3, true)],
+    })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.getByRole('status').textContent).toBe(
+      '已达到输出 token 上限DSH 已自动续跑一次，但恢复请求仍达到输出 token 上限。已有输出保留在对话中；发送“继续”可再次接着输出。',
+    )
   })
 
   it('hands the trajectory callback to the Tool seat', () => {

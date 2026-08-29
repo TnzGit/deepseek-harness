@@ -2,6 +2,8 @@
 
 Status: implemented
 
+[English](2026-08-20-minimal-preset-compaction.md) | 中文
+
 ## Problem
 
 已发布的 `minimal` 极简模式会刻意把模型可见工具目录收窄为持久 shell 与 `str_replace_editor`，但此前也一并去掉了上下文维护能力。长时间运行的极简会话因此没有 standard 编码组合已有的自动压力压缩、本地 `/compact` 命令，以及不调用模型的大工具结果裁剪。
@@ -13,6 +15,12 @@ Status: implemented
 `compaction-basic` 保留正常的自动压力压缩与上下文溢出恢复行为。`/compact` 复用现有本地命令，因此会出现在极简模式的斜杠菜单中。工具结果裁剪器沿用 standard 模式的显式限制：结果超过 8192 个字符时，替换为前 4096 个字符加后 1024 个字符。token meter 继续归 Host 所有；本地组只包含必须随 agent preset 切换的能力。
 
 这不会扩大模型工具 schema。极简模式下模型仍只看到持久 shell 与 `str_replace_editor`；压缩继续属于会话维护与命令能力。
+
+## Alternatives considered
+
+**要求极简模式用户在长会话中切换到标准模式。** 不采用，因为这会扩大模型可见工具目录，背离极简编码模式的目的。
+
+**把压缩暴露成另一个模型可见工具。** 不采用，因为压力维护和 `/compact` 属于 Host／session 能力；增加工具只会消耗 schema token，并不会改善自动恢复。
 
 ## Verification
 

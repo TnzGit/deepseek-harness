@@ -94,6 +94,8 @@ export interface Config {
   agents?: AgentLoopConfig['agents']
   /** Agent-loop concurrency cap; `1` is serial. */
   maxParallelToolCalls?: AgentLoopConfig['maxParallelToolCalls']
+  /** Agent-loop cap for reasoning-only output-limit continuations; `0` disables recovery. */
+  maxTokenContinuations?: AgentLoopConfig['maxTokenContinuations']
   /** Whether the system prompt includes the fixed Harness identity (default true). */
   includeHarnessIdentity?: SystemPromptConfig['includeHarnessIdentity']
   /** Whether model history includes dynamic runtime-context snapshots (default true). */
@@ -182,6 +184,7 @@ export const Config = z.intersect([
 export function pickSpineConfig(config: Omit<Config, 'agents'>): Omit<Config, 'agents'> {
   return {
     ...config.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: config.maxParallelToolCalls } : {},
+    ...config.maxTokenContinuations !== undefined ? { maxTokenContinuations: config.maxTokenContinuations } : {},
     ...config.includeHarnessIdentity !== undefined ? { includeHarnessIdentity: config.includeHarnessIdentity } : {},
     ...config.includeRuntimeContext !== undefined ? { includeRuntimeContext: config.includeRuntimeContext } : {},
     ...config.persona !== undefined ? { persona: config.persona } : {},
@@ -261,5 +264,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.plugin(AgentLoop, {
     agents: config.agents ?? [],
     ...config.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: config.maxParallelToolCalls } : {},
+    ...config.maxTokenContinuations !== undefined ? { maxTokenContinuations: config.maxTokenContinuations } : {},
   })
 }

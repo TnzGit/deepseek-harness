@@ -15,6 +15,7 @@ interface TurnMaxTokensState {
   readonly turn: number
   readonly seq: number
   readonly time: number
+  readonly autoContinuationExhausted: boolean
 }
 
 function lastStep(context: ConversationNodeContext<TurnMaxTokensState>): number {
@@ -40,7 +41,12 @@ function noticeAnchor(context: ConversationNodeContext<TurnMaxTokensState>, seq:
 
 function stateFrom(match: ConversationMatch): TurnMaxTokensState | undefined {
   if (match.event.type !== 'turn/end' || match.event.data.reason.kind !== 'max-tokens') return undefined
-  return { turn: match.event.data.turn, seq: match.event.seq, time: match.event.time }
+  return {
+    turn: match.event.data.turn,
+    seq: match.event.seq,
+    time: match.event.time,
+    autoContinuationExhausted: match.event.data.reason.autoContinuation === 'exhausted',
+  }
 }
 
 /** Notice Definition for a turn the provider ended at its output-token cap. */
@@ -68,6 +74,7 @@ export const turnMaxTokensDefinition: ConversationNodeDefinition<TurnMaxTokensSt
       time: state.time,
       turn: state.turn,
       step: lastStep(context),
+      autoContinuationExhausted: state.autoContinuationExhausted,
     }
     return chatNode(context, 'turn-max-tokens', noticeAnchor(context, state.seq), node)
   },

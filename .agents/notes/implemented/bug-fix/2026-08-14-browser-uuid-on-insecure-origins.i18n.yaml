@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-14-browser-uuid-on-insecure-origins.md
-2026-08-14-browser-uuid-on-insecure-origins.md: 2f109b140192d1171020e0960ed0a8ef860fbe67
-2026-08-14-browser-uuid-on-insecure-origins.zh.md: fce37dccf788b221cf79b3089b3fd6368a28cd7c
+2026-08-14-browser-uuid-on-insecure-origins.md: d50c4c4622d12712bea9b85e1a7bb3c4b0594998
+2026-08-14-browser-uuid-on-insecure-origins.zh.md: 1d9a307d8695e81a7e584563329cc80cd84cefd0

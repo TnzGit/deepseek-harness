@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-20-rtk-shell-guidance.md
-2026-08-20-rtk-shell-guidance.md: bba35dd5077d90cb8a807c3b93c646d702f6911d
-2026-08-20-rtk-shell-guidance.zh.md: d088054abada7327904e11deec358c291d934eac
+2026-08-20-rtk-shell-guidance.md: 65ac10cc7b3c8a9295c3614c686e673a6b457164
+2026-08-20-rtk-shell-guidance.zh.md: 71bf81af41f623a8868e891ddfcc3bdf796bcd3c

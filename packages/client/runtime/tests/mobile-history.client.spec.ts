@@ -100,7 +100,7 @@ describe('mobile history loading', () => {
   it('uses the ordinary 50-message page when a mobile user loads older history', async () => {
     mobile()
     const api = new FakeApiClient()
-    api.onHistory = (payload) => Promise.resolve(ok({
+    api.onHistory = payload => Promise.resolve(ok({
       events: payload.beforeSeq === undefined ? page(1, 100) as never[] : [],
       hasMore: payload.beforeSeq === undefined,
     }))

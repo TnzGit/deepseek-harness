@@ -31,7 +31,8 @@ describe('hooks-notify delivery', () => {
   it('posts the JSON payload once with the notification content type', async () => {
     const calls: Array<{ input: string; init: RequestInit }> = []
     const fetchImpl: typeof fetch = async (input, init) => {
-      calls.push({ input: String(input), init: init ?? {} })
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({ input: url, init: init ?? {} })
       return new Response(null, { status: 204 })
     }
     await postNotification('http://192.168.10.111:18473/notify', body, 1000, fetchImpl)
@@ -51,7 +52,7 @@ describe('hooks-notify delivery', () => {
 
   it('gives up when the endpoint never answers within the timeout', async () => {
     const fetchImpl: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () => reject(new Error('timed out')))
+      init?.signal?.addEventListener('abort', () => { reject(new Error('timed out')) })
     })
     await expect(postNotification('http://endpoint/notify', body, 5, fetchImpl)).rejects.toThrow()
   })

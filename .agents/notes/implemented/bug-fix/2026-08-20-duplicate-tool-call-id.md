@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-duplicate-tool-call-id.zh.md)
+
 ## Problem
 
 OpenAI-compatible and pi-ai event streams identify one streamed tool call by both a content/index position and a provider-issued tool-call id. A malformed provider stream can reuse the same non-empty id for two different indexes. If the adapter emits both `block-start` chunks, the durable session records two distinct tool-call starts with one correlation id; later tool result pairing and Conversation Node assembly can then fail with errors such as `received more than one start Match`, and the persisted history is no longer safely replayable.
@@ -15,6 +17,12 @@ Both streaming adapters now maintain a request-local `tool call id -> content in
 The check runs before emitting the second tool-call `block-start`. The DeepSeek SSE translator keys the map by the wire `tool_calls[].index`; the pi-ai translator keys it by `contentIndex` and rechecks the terminal `toolcall_end` in case a defensive stream omitted the id-bearing partial at start. Empty ids retain the existing lenient fallback and are not registered in the uniqueness map.
 
 The failure is intentionally terminal for that request. Persisting a malformed double-start and attempting to repair correlation later would make the session log itself ambiguous.
+
+## Alternatives considered
+
+**Repair duplicate ids after persistence.** Rejected because two durable starts with one correlation id are already ambiguous; no later consumer can prove which tool result belongs to which call.
+
+**Rewrite the second provider id locally.** Rejected because it invents correlation data the provider did not send and can detach later argument or result fragments from their intended call.
 
 ## Verification
 

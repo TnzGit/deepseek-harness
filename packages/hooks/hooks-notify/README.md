@@ -39,15 +39,11 @@ The row above is the base layer of the `hooks-notify` Settings section: a user-l
 
 ## Model Experience
 
-### Task-end notification
+None, as notifications travel outbound only; no session event, context message, or prompt section is added, and delivery failures never reach a model request.
 
-#### What the model sees
+#### KV Cache effect
 
-Nothing. Notifications travel outbound only; no session event, context message, or prompt section is added, and delivery failures never reach a model request.
-
-#### Token effect
-
-None.
+None; this package neither assembles nor sends a provider request.
 
 ## Known Limitations and Deferred Work
 

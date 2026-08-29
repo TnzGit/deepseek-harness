@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-context-aware-length-truncation.zh.md)
+
 ## Problem
 
 OpenAI-compatible inference servers can report `finish_reason: "length"` for two materially different terminal conditions. A request can genuinely consume its requested output budget, or the server can reduce the effective generation budget because prompt history already occupies most of the model context window. vLLM-style servers may return the same `length` reason in both cases after clipping generation to the remaining context capacity.

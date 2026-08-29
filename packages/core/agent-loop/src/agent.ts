@@ -37,6 +37,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { RuntimeContextProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
 import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
+import { reasoningOnlyMaxTokenFacts, withMaxTokenContinuation } from './max-token-continuation.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -49,6 +50,8 @@ type Phase =
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
+
+type StepResult = StepEndReason | { kind: 'continue-max-tokens' }
 
 type PreparedStep =
   | { kind: 'reject' }
@@ -280,6 +283,8 @@ export class ReactLoopAgent implements Agent {
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
+    let maxTokenContinuations = 0
+    const maxTokenContinuationLimit = this.loopCtx.agentLoop.config.maxTokenContinuations
     try {
       while (true) {
         signal.throwIfAborted()
@@ -303,11 +308,19 @@ export class ReactLoopAgent implements Agent {
           for (const message of decision.messages) {
             this.session.append('user/message', message, { surfaceOp: 'append' })
           }
-          // max-tokens is sticky: once any step hits the ceiling, later steps
-          // that complete normally must not downgrade the turn outcome.
-          const stepEnd = await this.step(decision.assembly)
-          // max-tokens stays sticky: a later completed step must not
-          // downgrade the turn outcome.
+          // An internal reasoning-only continuation opens another step without
+          // making max-tokens sticky; ordinary capped finishes remain terminal.
+          const stepEnd = await this.step(
+            decision.assembly,
+            maxTokenContinuations,
+            maxTokenContinuationLimit,
+          )
+          if (stepEnd?.kind === 'continue-max-tokens') {
+            maxTokenContinuations += 1
+            target = 'next-step'
+            continue
+          }
+          // Ordinary max-tokens stays sticky if a plugin supplies later work.
           if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
         } finally {
           this.session.append('step/end', { turn, step })
@@ -350,7 +363,11 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
-  private async step(assembly: PromptAssembly): Promise<StepEndReason | null> {
+  private async step(
+    assembly: PromptAssembly,
+    maxTokenContinuations: number,
+    maxTokenContinuationLimit: number,
+  ): Promise<StepResult | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
     const { turn, step, abort: { signal } } = this.phase
@@ -366,7 +383,10 @@ export class ReactLoopAgent implements Agent {
         step,
         assembly.tools,
         system,
-        withDegenerateRecovery(this.session.events, this.session.deriveMessages()),
+        withMaxTokenContinuation(
+          this.session.events,
+          withDegenerateRecovery(this.session.events, this.session.deriveMessages()),
+        ),
         attemptSignal,
       )
       const assembler = new BlockAssembler()
@@ -580,7 +600,36 @@ export class ReactLoopAgent implements Agent {
         },
         { surfaceOp: 'append', sourceEventSeqs: chunkSeqs },
       )
-      if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
+      if (finish.kind === 'max-tokens') {
+        const facts = reasoningOnlyMaxTokenFacts(message.content)
+        if (facts !== undefined && maxTokenContinuations < maxTokenContinuationLimit) {
+          const attempt = maxTokenContinuations + 1
+          this.session.append('agent/max-token-continuation', {
+            turn,
+            step,
+            continuationStep: step + 1,
+            attempt,
+            ...facts,
+            ...assembler.usage === undefined ? {} : { outputTokens: assembler.usage.outputTokens },
+          })
+          this.loopCtx.logger.warn('agent "%s": automatically continuing reasoning-only max-tokens response: %o', this.id, {
+            provider: request.provider,
+            model: request.model,
+            turn,
+            step,
+            continuationStep: step + 1,
+            attempt,
+            maxTokenContinuationLimit,
+            ...facts,
+            outputTokens: assembler.usage?.outputTokens,
+          })
+          return { kind: 'continue-max-tokens' }
+        }
+        return {
+          kind: 'max-tokens',
+          ...maxTokenContinuations === 0 ? {} : { autoContinuation: 'exhausted' },
+        }
+      }
 
       const toolCalls = message.content.filter(block => block.type === 'tool-call')
       if (toolCalls.length === 0) return { kind: 'completed' }

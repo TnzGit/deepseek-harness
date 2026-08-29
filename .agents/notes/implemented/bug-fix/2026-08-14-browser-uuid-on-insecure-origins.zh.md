@@ -2,7 +2,7 @@
 
 Status: implemented
 
-[English](2026-08-14-browser-uuid-on-insecure-origins.md) | Chinese
+[English](2026-08-14-browser-uuid-on-insecure-origins.md) | 中文
 
 ## Problem
 

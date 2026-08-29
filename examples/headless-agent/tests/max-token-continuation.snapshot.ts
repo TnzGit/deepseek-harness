@@ -15,7 +15,7 @@ interface ScriptedDeepSeekServer {
   close(): Promise<void>
 }
 
-const configPath = fileURLToPath(new URL('../length-compaction.cordis.snapshot.yml', import.meta.url))
+const configPath = fileURLToPath(new URL('../max-token-continuation.cordis.snapshot.yml', import.meta.url))
 const binScript = fileURLToPath(new URL('./fixtures/headless-driver.ts', import.meta.url))
 const tsconfigPath = fileURLToPath(new URL('../../../tsconfig.json', import.meta.url))
 
@@ -25,59 +25,27 @@ function encode(value: unknown): string {
   return encoded
 }
 
-const toolArguments = encode({
-  command: "printf 'length-recovery-marker\\n'",
-  description: 'Emit length recovery marker',
-})
-
 function wire(...events: unknown[]): string[] {
   return events.map(event => typeof event === 'string' ? event : encode(event))
 }
 
-async function lengthRecoveryServer(): Promise<ScriptedDeepSeekServer> {
+async function continuationServer(): Promise<ScriptedDeepSeekServer> {
   const requests: JsonObject[] = []
   const headers: IncomingMessage['headers'][] = []
   const responses = [
     wire(
-      {
-        choices: [{
-          delta: {
-            tool_calls: [{
-              index: 0,
-              id: 'call_length_recovery',
-              type: 'function',
-              function: { name: 'bash', arguments: toolArguments },
-            }],
-          },
-        }],
-      },
-      {
-        choices: [{ delta: {}, finish_reason: 'tool_calls' }],
-        usage: { prompt_tokens: 24, completion_tokens: 6 },
-      },
-      '[DONE]',
-    ),
-    wire(
-      { choices: [{ delta: { content: 'SUPERSEDED PARTIAL' } }] },
+      { choices: [{ delta: { reasoning_content: 'I am still working through the private analysis.' } }] },
       {
         choices: [{ delta: {}, finish_reason: 'length' }],
-        usage: { prompt_tokens: 999_000, completion_tokens: 1_000 },
+        usage: { prompt_tokens: 20, completion_tokens: 32 },
       },
       '[DONE]',
     ),
     wire(
-      { choices: [{ delta: { content: 'The direct length recovery premise is established.' } }] },
+      { choices: [{ delta: { content: 'AUTOMATIC CONTINUATION COMPLETE' } }] },
       {
         choices: [{ delta: {}, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 20, completion_tokens: 8 },
-      },
-      '[DONE]',
-    ),
-    wire(
-      { choices: [{ delta: { content: 'LENGTH RECOVERED' } }] },
-      {
-        choices: [{ delta: {}, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 20, completion_tokens: 4 },
+        usage: { prompt_tokens: 40, completion_tokens: 4 },
       },
       '[DONE]',
     ),
@@ -101,7 +69,7 @@ async function lengthRecoveryServer(): Promise<ScriptedDeepSeekServer> {
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
-  if (address === null || typeof address === 'string') throw new Error('length recovery snapshot server has no port')
+  if (address === null || typeof address === 'string') throw new Error('continuation snapshot server has no port')
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
@@ -128,24 +96,20 @@ function sessionEvents(records: readonly JsonObject[]): JsonObject[] {
   })
 }
 
-describe('direct DeepSeek context-clipped length recovery snapshot', () => {
-  it('compacts and replaces a partial length-clipped attempt', async () => {
-    const server = await lengthRecoveryServer()
+describe('direct DeepSeek reasoning-only max-token continuation snapshot', () => {
+  it('continues once without changing thinking configuration', async () => {
+    const server = await continuationServer()
     try {
       const result = await runLoaderSmoke({
-        label: 'direct DeepSeek context-clipped length recovery snapshot',
-        tempDirPrefix: 'headless-snapshot-length-compaction-',
+        label: 'direct DeepSeek reasoning-only max-token continuation snapshot',
+        tempDirPrefix: 'headless-snapshot-max-token-continuation-',
         binScript,
         libBinScript: binScript,
         configPath,
         binArgs: [
           configPath,
-          'Preserve this durable recovery premise and keep it available after context compaction. '
-            + 'The assembled headless application must execute one marker tool call, then recover from a '
-            + 'provider length stop caused by combined context capacity rather than the requested output cap. '
-            + 'The partial response from the clipped request must never become an assistant surface message. '
-            + 'Automatic compaction must summarize an older safe range, keep the newest tool result verbatim, '
-            + 'retry the same step, and finish with the exact words LENGTH RECOVERED.',
+          'Reason privately until the provider output cap, then finish with the exact words '
+            + 'AUTOMATIC CONTINUATION COMPLETE when DSH continues the turn.',
         ],
         tsconfigPath,
         env: {
@@ -161,41 +125,49 @@ describe('direct DeepSeek context-clipped length recovery snapshot', () => {
       expect(result.stderr).toBe('')
       const records = parseJsonl(result.stdout)
       const events = sessionEvents(records)
-      const eventJson = events.map(encode)
       const final = records.at(-1)
+      const requestJson = server.requests.map(encode)
       const projection = {
         requests: server.requests.length,
+        thinking: server.requests.map(request => request.thinking),
+        reasoningEffort: server.requests.map(request => request.reasoning_effort),
         maxTokens: server.requests.map(request => request.max_tokens),
-        compactRequests: server.headers.filter(header => header['x-deepseek-harness-compact'] === '1').length,
-        contextErrors: eventJson.filter(text => text.includes('CONTEXT_WINDOW_EXCEEDED')).length,
-        compactionEvents: events
-          .map(event => event.type)
-          .filter(type => type === 'compaction/start' || type === 'compaction/summary' || type === 'compaction/end'),
-        partialLogged: eventJson.some(text => text.includes('SUPERSEDED PARTIAL')),
-        partialCommitted: events.some(event => event.type === 'assistant/message'
-          && encode(event).includes('SUPERSEDED PARTIAL')),
+        recoveryPromptRequests: requestJson.filter(text => text.includes('without restarting the analysis')).length,
+        continuationEvents: events.filter(event => event.type === 'agent/max-token-continuation').length,
+        stepStarts: events.filter(event => event.type === 'step/start').length,
+        turnReason: events.findLast(event => event.type === 'turn/end')?.data,
         finalOutput: final?.type === 'result' ? final.output : undefined,
       }
 
       expect(projection).toMatchInlineSnapshot(`
         {
-          "compactRequests": 1,
-          "compactionEvents": [
-            "compaction/start",
-            "compaction/summary",
-            "compaction/end",
-          ],
-          "contextErrors": 1,
-          "finalOutput": "LENGTH RECOVERED",
+          "continuationEvents": 1,
+          "finalOutput": "AUTOMATIC CONTINUATION COMPLETE",
           "maxTokens": [
-            256000,
-            256000,
             32,
-            256000,
+            32,
           ],
-          "partialCommitted": false,
-          "partialLogged": true,
-          "requests": 4,
+          "reasoningEffort": [
+            "max",
+            "max",
+          ],
+          "recoveryPromptRequests": 1,
+          "requests": 2,
+          "stepStarts": 2,
+          "thinking": [
+            {
+              "type": "enabled",
+            },
+            {
+              "type": "enabled",
+            },
+          ],
+          "turnReason": {
+            "reason": {
+              "kind": "completed",
+            },
+            "turn": 1,
+          },
         }
       `)
     } finally {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { createAssistantMessage, createUserMessage, CallId, DEGENERATE_RESPONSE_CODE, LlmError, StreamChunk  } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createAssistantMessage, createUserMessage, CallId, DEGENERATE_RESPONSE_CODE, LlmError, ReasoningEffortId, StreamChunk  } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
@@ -8,7 +8,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { withDegenerateRecovery } from '../src/degenerate-response.ts'
-import { MockAdapter, maxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
+import { MockAdapter, maxTokensResponse, reasoningMaxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 function driverDone(agent: Agent): Promise<void> {
   return (agent as Agent & { done: Promise<void> }).done
@@ -1110,6 +1110,63 @@ describe('agent loop', () => {
     // Assert the durable row, not only the live listener.
     const turnEnd = agent.session.events.findLast(e => e.type === 'turn/end')
     expect(turnEnd!.data.reason).toEqual({ kind: 'max-tokens' })
+  })
+
+  it('automatically continues one reasoning-only max-tokens step without changing thinking', async () => {
+    const effort = ReasoningEffortId('xhigh')
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('analysis in progress'),
+      textResponse('finished answer'),
+    ], {
+      efforts: [{ id: effort, name: 'XHigh' }],
+      defaultEffort: effort,
+    })
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests.map(request => request.reasoningEffort)).toEqual([effort, effort])
+    expect(adapter.requests[1]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      source: { kind: 'plugin', plugin: 'agent-loop-max-token-continuation' },
+    })
+    expect(agent.session.events.filter(event => event.type === 'step/start')).toHaveLength(2)
+    expect(agent.session.events.filter(event => event.type === 'agent/max-token-continuation'))
+      .toMatchObject([{
+        data: {
+          turn: 1,
+          step: 1,
+          continuationStep: 2,
+          attempt: 1,
+          reasoningCharacters: 20,
+          outputTokens: 20,
+        },
+      }])
+    expect(agent.session.deriveMessages().some(message => message.source.kind === 'plugin')).toBe(false)
+    const turnEnd = agent.session.events.findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toEqual({ kind: 'completed' })
+  })
+
+  it('stops after the bounded reasoning-only max-tokens continuation is exhausted', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('first analysis'),
+      reasoningMaxTokensResponse('continued analysis'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    const turnEnd = agent.session.events.findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toEqual({
+      kind: 'max-tokens',
+      autoContinuation: 'exhausted',
+    })
   })
 
   it('a max-tokens step earlier in a turn still surfaces as max-tokens after a later completed step', async () => {

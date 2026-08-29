@@ -39,15 +39,11 @@
 
 ## Model Experience
 
-### 任务结束通知
+无，因为通知只向外发送；不添加任何会话事件、上下文消息或提示词节，发送失败也永远不会进入模型请求。
 
-#### What the model sees（模型看到什么）
+#### KV Cache effect（KV Cache 影响）
 
-什么都没有。通知只向外发送；不添加任何会话事件、上下文消息或提示词节，发送失败也永远不会进入模型请求。
-
-#### Token effect（Token 影响）
-
-无。
+无；此包既不组装也不发送提供方请求。
 
 ## Known Limitations and Deferred Work（已知限制与暂缓工作）
 

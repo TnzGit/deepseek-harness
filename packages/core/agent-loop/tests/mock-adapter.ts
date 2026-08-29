@@ -48,6 +48,17 @@ export function maxTokensResponse(text: string): StreamChunk[] {
   ]
 }
 
+/** A reasoning-only response cut off at the per-request output-token ceiling. */
+export function reasoningMaxTokensResponse(reasoning: string): StreamChunk[] {
+  return [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: reasoning },
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } },
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: reasoning.length } },
+    { type: 'finish', reason: { kind: 'max-tokens' } },
+  ]
+}
+
 export function toolCallResponse(rawCallId: string, name: string, args: object, text?: string): StreamChunk[] {
   const callId = CallId(rawCallId)
   const argumentsJson = JSON.stringify(args)
