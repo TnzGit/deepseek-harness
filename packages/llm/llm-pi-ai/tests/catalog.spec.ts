@@ -181,8 +181,8 @@ describe('hand-declared providers', () => {
     // The fallback is a guess, so a deployment whose gateway serves smaller
     // models corrects it once for the whole route.
     expect(modelsOf('tuned-gateway')).toMatchObject([{ id: 'bare', contextWindow: 4096, maxTokens: 256 }])
-    // Only an explicitly configured cap is a request default; a fallback is
-    // the model's capability and stops there.
+    // The provenance map still contains only explicit deployment choices;
+    // adapter model metadata later exposes each resolved cap used by pi-ai.
     expect(resolved.get('acme-gateway')?.configuredMaxTokens.get('bare')).toBeUndefined()
     expect(resolved.get('acme-gateway')?.configuredMaxTokens.get('sized')).toBe(512)
   })
@@ -423,17 +423,20 @@ describe('catalog routes with per-model configuration', () => {
     })
 
     const info = await ctx.llm.resolveModelInfo('deepseek', catalogModel.id)
-    // The configured field wins and the name still comes from the catalog. The
-    // catalog's own output cap is the model's capability, not a cap anyone
-    // chose, so it must not arrive as the request default.
+    // The configured field wins and the name still comes from the catalog.
+    // pi-ai sends the materialized model cap when a request omits maxTokens,
+    // so DSH must expose that effective default for pressure accounting.
     expect(info.context).toEqual({ contextWindow: 4096 })
     expect(info.name).toBe(catalogModel.name)
-    expect(info.defaultMaxTokens).toBeUndefined()
+    expect(info.defaultMaxTokens).toBe(catalogModel.maxTokens)
+    const prepared = await ctx.llm.prepareCall({ provider: 'deepseek', model: catalogModel.id })
+    expect(prepared.config.maxTokens).toBe(catalogModel.maxTokens)
+    expect(prepared.adapterDefaults.maxTokens).toBe(true)
     // An explicit list replaces the catalog rather than adding to it.
     expect((await ctx.llm.listModels('deepseek')).map(model => model.id)).toEqual([catalogModel.id])
   })
 
-  it('materializes a request default only from a configured output cap', async () => {
+  it('lets an explicitly configured output cap replace the effective request default', async () => {
     const server = await mockServer([])
     const [catalogModel] = getBuiltinModels('deepseek')
     if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')

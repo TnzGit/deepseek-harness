@@ -17,6 +17,9 @@ interface SummaryConfig {
   readonly maxTokens: number
 }
 
+/** Stable failure code for a successful stream that produced no usable checkpoint. */
+export const DEGENERATE_SUMMARY_CODE = 'COMPACTION_SUMMARY_DEGENERATE'
+
 /** Tags wrapping the structured summary inside the landed checkpoint node. */
 const SUMMARY_OPEN_TAG = '<compacted-summary>'
 const SUMMARY_CLOSE_TAG = '</compacted-summary>'
@@ -167,8 +170,15 @@ export async function summarizeWithLlm(
 
   const rawOutput = assembler.blocks()
   const summary = summaryText(rawOutput)
-  if (!summary.some(block => block.text.trim().length > 0)) {
-    throw new Error('summarization produced no text summary content')
+  const visible = summary.map(block => block.text).join('').trim()
+  if (!/[\p{L}\p{N}]/u.test(visible)) {
+    const error = new Error(
+      visible.length === 0
+        ? 'summarization produced no text summary content'
+        : 'summarization produced only whitespace or punctuation',
+    ) as Error & { code?: string }
+    error.code = DEGENERATE_SUMMARY_CODE
+    throw error
   }
   return {
     summary,

@@ -539,10 +539,9 @@ export interface PiAiModelProfile {
   /** Maximum combined request and response context in tokens. */
   contextWindow?: number
   /**
-   * Maximum output tokens. Configuring one also makes it this model's
-   * per-request default; a value inherited from the installed catalog, or the
-   * route's fallback, is the model's capability and never becomes a request
-   * default on its own.
+   * Maximum output tokens. pi-ai uses the resolved model value when a request
+   * omits its own cap, so every resolved source also becomes the effective
+   * per-request default exposed through the Harness seam.
    */
   maxTokens?: number
   /**
@@ -758,16 +757,7 @@ function resolveModelCompat(
 export interface RouteCatalog {
   /** The materialized models in configuration order. */
   models: readonly Model<Api>[]
-  /**
-   * Per-request output caps this profile explicitly configured, by model id.
-   *
-   * Separate from `Model.maxTokens` because the two answer different
-   * questions: pi-ai requires `maxTokens` as the model's output *capability*,
-   * while the harness seam's `defaultMaxTokens` is a cap the deployment chose
-   * to send on requests that name none. Materializing a catalog capability as
-   * a request default would start capping every request at a number nobody
-   * picked, so only an explicit configuration lands here.
-   */
+  /** Per-model caps explicitly configured by this deployment. */
   configuredMaxTokens: ReadonlyMap<string, number>
 }
 
@@ -856,8 +846,8 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
     if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
       invalid(provider, `model "${entry.id}" maxTokens must be a positive integer`)
     }
-    // Only a value the profile named is a deployment choice; the catalog's is
-    // the model's capability and stays out of request defaults.
+    // Keep the explicit subset for configuration provenance. Dispatch still
+    // uses the fully resolved maxTokens value as its effective default.
     if (entry.maxTokens !== undefined) configuredMaxTokens.set(entry.id, entry.maxTokens)
     return {
       // The installed entry lays the floor, and the fields below override it.

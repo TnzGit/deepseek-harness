@@ -900,6 +900,29 @@ describe('compaction region transaction', () => {
     expect(session.events.filter(event => event.type === 'compaction/end')).toHaveLength(2)
   })
 
+  it('retries a degenerate summary over a smaller balanced prefix', async () => {
+    const compact = service()
+    const empty = Object.assign(new Error('summarization produced no text summary content'), {
+      code: 'COMPACTION_SUMMARY_DEGENERATE',
+    })
+    compact.errors.push(empty)
+    const session = conversation(4)
+    const before = [...session.surface.nodes]
+
+    const result = await compact.compactRegion(
+      before[0]!,
+      before[5]!,
+      agent(session, MODEL),
+      SIGNAL,
+    )
+
+    expect(compact.calls).toHaveLength(2)
+    expect(summarizedText(compact.calls[0]!.input)).toContain('user 3')
+    expect(summarizedText(compact.calls[1]!.input)).not.toContain('user 3')
+    expect(result.shadowedRange.end).toBeLessThan(before[5]!)
+    expect(session.events.filter(event => event.type === 'compaction/end')).toHaveLength(2)
+  })
+
   it('lands a framed, replayable checkpoint with exact source seqs and token price', async () => {
     const compact = service()
     compact.rawOutput = [
@@ -1455,6 +1478,18 @@ describe('default one-shot summarizer', () => {
     const { compact } = await summarizerHarness([{ type: 'reasoning', text: 'private' }])
     await expect(compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL)))
       .rejects.toThrow(/no text summary content/)
+  })
+
+  it('rejects punctuation-only successful output as a degenerate summary', async () => {
+    const { compact } = await summarizerHarness([{ type: 'text', text: '... !!!' }])
+    let thrown: unknown
+    try {
+      await compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL))
+    } catch (error: unknown) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error & { code?: string }).code).toBe('COMPACTION_SUMMARY_DEGENERATE')
   })
 
   it('rejects image summary output instead of silently dropping it', async () => {

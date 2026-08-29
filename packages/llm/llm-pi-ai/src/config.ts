@@ -129,8 +129,9 @@ export interface PiAiProviderProfile {
   defaultContextWindow?: number
   /**
    * Output capability for a model this route lists that neither the entry nor
-   * the installed catalog sizes (default 32,768). This sizes the model; it
-   * never becomes a per-request cap on its own.
+   * the installed catalog sizes (default 32,768). pi-ai also uses the resolved
+   * value as the request cap when a call names none, so the adapter exposes it
+   * as the effective default for request replay and context-pressure accounting.
    */
   defaultMaxTokens?: number
   /**
@@ -203,8 +204,8 @@ export interface ResolvedPiAiProviderProfile
   piProvider: Provider
   /**
    * Per-request output caps this profile explicitly configured, by model id.
-   * The seam materializes one only into a request that names no cap of its
-   * own, so a catalog capability must not appear here.
+   * This provenance map distinguishes deployment choices from inherited or
+   * fallback values; the adapter still exposes the resolved model cap.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
 }

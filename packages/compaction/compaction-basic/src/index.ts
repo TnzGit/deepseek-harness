@@ -34,7 +34,7 @@ import {
   selectCompactableRange,
   shrinkCompactableRange,
 } from './region.ts'
-import { summarizeWithLlm } from './summarizer.ts'
+import { DEGENERATE_SUMMARY_CODE, summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
@@ -119,6 +119,18 @@ function isSummaryTokenCap(error: unknown): boolean {
   while (current instanceof Error && !seen.has(current)) {
     seen.add(current)
     if ((current as Error & { code?: string }).code === 'MAX_TOKENS') return true
+    current = current.cause
+  }
+  return false
+}
+
+/** Whether a summary attempt completed without a usable visible checkpoint. */
+function isDegenerateSummary(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === DEGENERATE_SUMMARY_CODE) return true
     current = current.cause
   }
   return false
@@ -446,7 +458,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     )
   }
 
-  /** Retry a truncated summary over progressively smaller balanced prefixes. */
+  /** Retry a truncated or degenerate summary over progressively smaller balanced prefixes. */
   private async compactRangeWithFallback(
     initial: { readonly start: number; readonly end: number },
     agent: Agent,
@@ -465,7 +477,9 @@ export class BasicCompactionEngine extends CompactionEngine {
         )
         return await run(range)
       } catch (error: unknown) {
-        if (!isSummaryTokenCap(error) || attempt >= SUMMARY_RANGE_RETRIES) throw error
+        const tokenCap = isSummaryTokenCap(error)
+        const degenerate = isDegenerateSummary(error)
+        if ((!tokenCap && !degenerate) || attempt >= SUMMARY_RANGE_RETRIES) throw error
         const smaller = shrinkCompactableRange(
           agent.session,
           this.ctx.tokenMeter.measure(agent.session),
@@ -473,7 +487,8 @@ export class BasicCompactionEngine extends CompactionEngine {
         )
         if (smaller === null) throw error
         this.ctx.logger.warn(
-          'compaction summary reached its token cap; retrying a smaller balanced range '
+          `compaction summary ${tokenCap ? 'reached its token cap' : 'produced no usable checkpoint'}; `
+          + 'retrying a smaller balanced range '
           + `(seqs ${range.start}-${range.end} -> ${smaller.start}-${smaller.end})`,
         )
         range = smaller

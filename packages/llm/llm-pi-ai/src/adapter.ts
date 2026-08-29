@@ -295,16 +295,20 @@ export class PiAiAdapter extends LlmAdapter {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
     const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
-    // Only a cap the deployment configured is a request default; the
-    // catalog's `maxTokens` sizes the model and stops there.
+    // pi-ai uses Model.maxTokens when a call omits maxTokens, so that value is
+    // the effective request default even when it came from the installed
+    // catalog or this route's fallback. Expose the same value through the DSH
+    // seam: request/header replay and proactive compaction must reserve the
+    // budget that will actually be sent on the wire.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
+    const effectiveDefaultMaxTokens = configuredMaxTokens ?? resolvedModel.maxTokens
     return {
       provider,
       id: model,
       name: resolvedModel.name,
       inputModalities: [...resolvedModel.input],
       context: { contextWindow: resolvedModel.contextWindow },
-      ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
+      defaultMaxTokens: effectiveDefaultMaxTokens,
       ...reasoningInfo(resolvedModel, defaultLevel),
     }
   }
