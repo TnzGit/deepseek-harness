@@ -339,7 +339,7 @@ export class PiAiAdapter extends LlmAdapter {
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
     const model = this.modelOf(snapshot, options.provider, options.model)
-    const reasoning = options.purpose === 'compaction'
+    const reasoning = options.purpose === 'compaction' || options.purpose === 'session-title'
       ? getSupportedThinkingLevels(model).some(level => level === 'off') ? 'off' : undefined
       : resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)

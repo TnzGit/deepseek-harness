@@ -261,14 +261,14 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests).toHaveLength(2)
   })
 
-  it('disables reasoning for compaction requests', async () => {
+  it.each(['compaction', 'session-title'] as const)('disables reasoning for %s requests', async (purpose) => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, { reasoning: 'max' })
 
     await assemble(ctx, {
       model: 'deepseek-v4-flash',
       reasoningEffort: ReasoningEffortId('max'),
-      purpose: 'compaction',
+      purpose,
       messages: [],
     })
 
@@ -761,8 +761,8 @@ describe('provider profile lifecycle', () => {
     expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
   })
 
-  it('dispatches custom Qwen chat-template thinking state and disables it for compaction', async () => {
-    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+  it('dispatches custom Qwen chat-template thinking state and disables it for auxiliary requests', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }, { events: textEvents }])
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(LlmPiAi, {
@@ -807,6 +807,18 @@ describe('provider profile lifecycle', () => {
       chat_template_kwargs: { enable_thinking: false, preserve_thinking: true },
     })
     expect((server.requests[1] as { chat_template_kwargs: object }).chat_template_kwargs)
+      .not.toHaveProperty('reasoning_effort')
+
+    await assemble(ctx, {
+      provider: 'qwen-local',
+      model: 'qwen-custom',
+      purpose: 'session-title',
+      messages: [],
+    })
+    expect(server.requests[2]).toMatchObject({
+      chat_template_kwargs: { enable_thinking: false, preserve_thinking: true },
+    })
+    expect((server.requests[2] as { chat_template_kwargs: object }).chat_template_kwargs)
       .not.toHaveProperty('reasoning_effort')
   })
 
