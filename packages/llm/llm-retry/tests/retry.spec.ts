@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, CallId, EMPTY_RESPONSE_CODE, LlmAdapter, LlmError, resolveRetryPolicy  } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, CallId, LlmAdapter, LlmError, resolveRetryPolicy  } from '@deepseek-ai/dsh-llm'
 import type {
   AlwaysRetryPolicyConfig,
   BackoffConfig,
@@ -79,20 +79,13 @@ function textResponse(text: string): StreamChunk[] {
   ]
 }
 
-/**
- * A degenerate empty provider completion as an error finish chunk. Both
- * adapters emit this shape and the EMPTY_RESPONSE code (the field the policy
- * routes on); the message text here is the deepseek adapter's phrasing (pi-ai
- * qualifies it with the model name).
- */
-function emptyCompletion(): StreamChunk[] {
+function serverFailure(): StreamChunk[] {
   return [
-    { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } },
     {
       type: 'finish',
       reason: {
         kind: 'error',
-        failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE_CODE },
+        failure: { message: 'provider unavailable', code: 'SERVER', status: 503 },
       },
     },
   ]
@@ -223,15 +216,16 @@ describe('provider-routed retry policy', () => {
     })
   })
 
-  it('retries an EMPTY_RESPONSE error finish under the default retryable codes', async () => {
+  it('retries a SERVER error finish under the default retryable codes', async () => {
     vi.useFakeTimers()
     const adapter = new ScriptedAdapter([
-      emptyCompletion(),
+      serverFailure(),
       textResponse('recovered'),
     ])
-    // No retryableCodes override: this proves the default policy covers the
-    // adapters' empty-completion classification end to end (finish-chunk error
-    // delivery, not a thrown stream error).
+    // No retryableCodes override: this proves the default policy is exercised
+    // end to end for an in-stream error finish. EMPTY_RESPONSE is intentionally
+    // intercepted earlier by the agent loop's one-shot degenerate-response
+    // recovery, so it cannot exercise this plugin boundary.
     ;({ ctx: context } = await harness(adapter))
     const agent = context.agentLoop.create(SessionId('retry-empty-response'), { provider: 'mock', model: 'mock' })
     const scheduled = waitForRetry(context, agent, 1)
@@ -239,8 +233,9 @@ describe('provider-routed retry policy', () => {
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
     const event = await scheduled
     expect(event.data.failure).toEqual({
-      message: 'model returned a completed response with no content',
-      code: EMPTY_RESPONSE_CODE,
+      message: 'provider unavailable',
+      code: 'SERVER',
+      status: 503,
     })
 
     const idle = waitForIdle(context, agent)
@@ -341,6 +336,48 @@ describe('provider-routed retry policy', () => {
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'busy three', code: 'SERVER' } } },
     })
+  })
+
+  it('uses a TIMEOUT-specific 15s, 30s, 60s budget without changing transport backoff', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter([
+      new LlmError('timeout one', 'TIMEOUT'),
+      new LlmError('timeout two', 'TIMEOUT'),
+      new LlmError('timeout three', 'TIMEOUT'),
+      new LlmError('timeout four', 'TIMEOUT'),
+    ])
+    ;({ ctx: context } = await harness(adapter, {
+      mock: normalConfig({
+        maxRetries: 5,
+        backoff: { initialDelayMs: 8_550, maxDelayMs: 8_550, jitterRatio: 0 },
+        failureOverrides: {
+          TIMEOUT: {
+            maxRetries: 3,
+            backoff: { initialDelayMs: 15_000, maxDelayMs: 60_000, jitterRatio: 0 },
+          },
+        },
+      }),
+    }))
+    const agent = context.agentLoop.create(SessionId('retry-timeout-override'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await vi.runAllTimersAsync()
+    await idle
+
+    expect(adapter.requests).toHaveLength(4)
+    expect(agent.session.events.filter(event => event.type === 'llm/retry').map(event => ({
+      retry: event.data.retry,
+      maxRetries: event.data.mode === 'normal' ? event.data.maxRetries : undefined,
+      delayMs: event.data.delayMs,
+    }))).toEqual([
+      { retry: 1, maxRetries: 3, delayMs: 15_000 },
+      { retry: 2, maxRetries: 3, delayMs: 30_000 },
+      { retry: 3, maxRetries: 3, delayMs: 60_000 },
+    ])
   })
 
   it('accepts the zero-delay lower jitter bound', async () => {

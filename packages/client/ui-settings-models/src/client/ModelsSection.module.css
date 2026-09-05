@@ -269,6 +269,18 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.retryDelayEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.retryDelayFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
 .linkButton {
   box-sizing: border-box;
   display: inline-flex;

@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 Function plugin that applies exact-provider retry policy through the agent loop's closed-step `agent/request-error` waterfall. It does not wrap `ctx.llm.stream()`: every adapter call remains one provider attempt, and every retry opens a fresh numbered turn.
 
-Each provider adapter owns an optional nested `retryPolicy`, captured when its route registers on `ctx.llm` and carried with each call that reaches that registration's final adapter boundary. An in-flight failure retains that serving policy if the route is later disposed or replaced; a failure before any final adapter is selected has no provider policy and delegates. Omission uses normal mode: five retries for `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, and `TRANSPORT`, with bounded exponential backoff from 500 ms to 10 seconds and 10 percent jitter. `EMPTY_RESPONSE` is the adapters' classification of a degenerate provider completion that produced no durable content, so repeating it is safe. A normal policy can change its finite budget, eligible codes, and backoff. Always mode asks downstream recovery first, then retries every model-request failure without an attempt limit; success, cancellation, or plugin disposal stops it after active delegated recovery reaches quiescence.
+Each provider adapter owns an optional nested `retryPolicy`, captured when its route registers on `ctx.llm` and carried with each call that reaches that registration's final adapter boundary. An in-flight failure retains that serving policy if the route is later disposed or replaced; a failure before any final adapter is selected has no provider policy and delegates. Omission uses normal mode: five retries for `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, and `TRANSPORT`, with bounded exponential backoff from 500 ms to 10 seconds and 10 percent jitter. `EMPTY_RESPONSE` is the adapters' classification of a degenerate provider completion that produced no durable content, so repeating it is safe. A normal policy can change its finite budget, eligible codes, and backoff, and `failureOverrides` can give one eligible code its own maximum and backoff. Always mode asks downstream recovery first, then retries every model-request failure without an attempt limit; success, cancellation, or plugin disposal stops it after active delegated recovery reaches quiescence.
 
 Both modes use bounded exponential backoff with symmetric jitter. A valid `providerRetryAfterMs` at or below `maxDelayMs` replaces local backoff without jitter. An over-cap provider delay makes normal mode delegate, while always mode uses its configured local backoff so it cannot terminate on that instruction.
 
@@ -26,7 +26,7 @@ The separately published `./invariant` companion checks that every scheduled ret
 - name: '@deepseek-ai/dsh-llm-retry'
 ```
 
-The executor has no policy config. Multi-provider adapters such as `dsh-llm-pi-ai` place `retryPolicy` inside each provider profile, avoiding a second provider-name list.
+The executor has no policy config. Multi-provider adapters such as `dsh-llm-pi-ai` place `retryPolicy` inside each provider profile, avoiding a second provider-name list. In normal mode, a `failureOverrides.TIMEOUT` entry can, for example, use `maxRetries: 3` with a zero-jitter backoff from 15 to 60 seconds while the route's ordinary transport failures retain their own fixed or exponential delay.
 
 ## Model Experience
 

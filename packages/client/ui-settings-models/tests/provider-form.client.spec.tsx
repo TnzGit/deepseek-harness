@@ -754,7 +754,7 @@ describe('hand-declared providers', () => {
     await mountSection({ providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } })
     openEditor('openai')
     fireEvent.click(screen.getByText(en.customized))
-    expect(fields()).toEqual([en.keyInput, en.baseUrl])
+    expect(fields()).toEqual([en.keyInput, en.baseUrl, en.retryDelayStrategy])
     cleanup()
 
     // A hand-declared route named its own protocol at creation, so editing it
@@ -764,7 +764,13 @@ describe('hand-declared providers', () => {
       declaredRoutes: ['acme-gateway'],
     })
     openEditor('acme-gateway')
-    expect(fields()).toEqual([en.keyInput, en.customDisplayName, en.baseUrl, en.customApi])
+    expect(fields()).toEqual([
+      en.keyInput,
+      en.customDisplayName,
+      en.baseUrl,
+      en.retryDelayStrategy,
+      en.customApi,
+    ])
   })
 
   it('renames a declared route and falls back to its id when the name is cleared', async () => {
@@ -1286,6 +1292,99 @@ describe('hand-declared providers', () => {
 
     await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
     expect(set).not.toHaveBeenCalled()
+  })
+})
+
+describe('retry delay editing', () => {
+  it('stores an exact fixed delay without changing retry eligibility', async () => {
+    const { mutate } = await mountSection({
+      providers: {
+        openai: {
+          baseURL: 'https://proxy.example/v1',
+          retryPolicy: { mode: 'normal', maxRetries: 7, retryableCodes: ['TRANSPORT', 'TIMEOUT'] },
+        },
+      },
+    })
+    openEditor('openai')
+
+    fireEvent.change(screen.getByLabelText(en.retryDelayStrategy), { target: { value: 'fixed' } })
+    fireEvent.change(screen.getByLabelText(en.retryDelayFixedMs), { target: { value: '8550' } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(mutate).ops).toContainEqual({
+      op: 'set',
+      path: ['providers', 'openai', 'retryPolicy'],
+      value: {
+        mode: 'normal',
+        maxRetries: 7,
+        retryableCodes: ['TRANSPORT', 'TIMEOUT'],
+        backoff: { initialDelayMs: 8550, maxDelayMs: 8550, jitterRatio: 0 },
+      },
+    })
+  })
+
+  it('stores deterministic exponential backoff with a user-selected cap', async () => {
+    const { mutate } = await mountSection()
+    openEditor('openai')
+
+    fireEvent.change(screen.getByLabelText(en.retryDelayStrategy), { target: { value: 'exponential' } })
+    fireEvent.change(screen.getByLabelText(en.retryDelayInitialMs), { target: { value: '1000' } })
+    fireEvent.change(screen.getByLabelText(en.retryDelayMaxMs), { target: { value: '16000' } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(mutate).ops).toContainEqual({
+      op: 'set',
+      path: ['providers', 'openai', 'retryPolicy'],
+      value: {
+        mode: 'normal',
+        backoff: { initialDelayMs: 1000, maxDelayMs: 16000, jitterRatio: 0 },
+      },
+    })
+  })
+
+  it('restores inherited timing while preserving retry count and codes', async () => {
+    const { mutate } = await mountSection({
+      providers: {
+        openai: {
+          retryPolicy: {
+            mode: 'normal',
+            maxRetries: 4,
+            retryableCodes: ['TRANSPORT'],
+            backoff: { initialDelayMs: 8550, maxDelayMs: 8550, jitterRatio: 0 },
+          },
+        },
+      },
+    })
+    openEditor('openai')
+
+    expect(screen.getByLabelText<HTMLSelectElement>(en.retryDelayStrategy).value).toBe('fixed')
+    expect(screen.getByLabelText<HTMLInputElement>(en.retryDelayFixedMs).value).toBe('8550')
+    fireEvent.change(screen.getByLabelText(en.retryDelayStrategy), { target: { value: 'inherited' } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(mutate).ops).toContainEqual({
+      op: 'set',
+      path: ['providers', 'openai', 'retryPolicy'],
+      value: { mode: 'normal', maxRetries: 4, retryableCodes: ['TRANSPORT'] },
+    })
+  })
+
+  it('rejects unreadable delays and an initial delay above the cap', async () => {
+    const { mutate } = await mountSection()
+    openEditor('openai')
+
+    fireEvent.change(screen.getByLabelText(en.retryDelayStrategy), { target: { value: 'exponential' } })
+    fireEvent.change(screen.getByLabelText(en.retryDelayInitialMs), { target: { value: '20000' } })
+    expect(screen.getByText(en.retryDelayOrderInvalid)).toBeTruthy()
+    expect(buttonNamed(en.apply).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(en.retryDelayInitialMs), { target: { value: '' } })
+    expect(screen.getByText(en.retryDelayInvalid)).toBeTruthy()
+    expect(buttonNamed(en.apply).disabled).toBe(true)
+    expect(mutate).not.toHaveBeenCalled()
   })
 })
 

@@ -6,8 +6,9 @@
  * has none. The pi-ai profile records that derivation as `apiKeyEnv` only when
  * a key is entered; a blank key materializes a reference-free profile for
  * provider-native authentication);
- * the collapsed 自定义设置 area carries the per-family extras (`baseURL` for
- * both families, DeepSeek's id/name/context-window model catalog, and the
+ * the collapsed 自定义设置 area carries the per-family extras (`baseURL` and
+ * provider-owned retry timing for both families, DeepSeek's
+ * id/name/context-window model catalog, and the
  * display name and wire protocol of a pi-ai route the adapter does not ship —
  * the two fields the create card asked that route for, editable here for the
  * same reason).
@@ -15,8 +16,9 @@
  * the models under one provider disagree about it, so a provider-scoped
  * control can only be set to a value some of them reject. The composer's
  * model picker offers each model its own levels; `settings.yaml` keeps the
- * profile field for a deployment that knows its route. Everything else stays
- * owned by `settings.yaml`. Profile edits land as minimal `settings.mutate`
+ * profile field for a deployment that knows its route. Retry counts and
+ * eligible codes, plus every other advanced field, stay owned by
+ * `settings.yaml`. Profile edits land as minimal `settings.mutate`
  * path ops against the stored section — the card names only the fields it can
  * see instead of rebuilding the whole subtree from a partial descriptor.
  */
@@ -37,6 +39,16 @@ import styles from './ModelsSection.module.css'
 
 /** Per-adapter-family curated field sets (unknown namespaces get the hint alone). */
 type EditorLayout = 'deepseek' | 'pi-ai' | 'unknown'
+
+/** Retry-delay presentation over the provider policy's existing backoff fields. */
+type RetryDelayStrategy = 'inherited' | 'fixed' | 'exponential'
+
+/** The largest delay JavaScript timers can represent without truncation. */
+const MAX_RETRY_DELAY_MS = 2_147_483_647
+
+/** Defaults used by the provider-owned retry policy when no backoff is stored. */
+const DEFAULT_RETRY_INITIAL_DELAY_MS = 500
+const DEFAULT_RETRY_MAX_DELAY_MS = 10_000
 
 /** The public DeepSeek endpoint shown as the deepseek base-URL placeholder. */
 const DEEPSEEK_PUBLIC_BASE_URL = 'https://api.deepseek.com'
@@ -132,6 +144,36 @@ function layoutOf(ns: string): EditorLayout {
   return 'unknown'
 }
 
+/** A non-array object, or an empty view when the value is not one. */
+function recordOf(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+/** A positive timer delay typed as an integer number of milliseconds. */
+function retryDelayOf(text: string): number | undefined {
+  if (!/^[1-9]\d*$/.test(text)) return undefined
+  const value = Number(text)
+  return Number.isSafeInteger(value) && value <= MAX_RETRY_DELAY_MS ? value : undefined
+}
+
+/** Read one resolved backoff number, falling back to the shared provider default. */
+function backoffNumber(source: unknown, key: 'initialDelayMs' | 'maxDelayMs', fallback: number): number {
+  const value = recordOf(recordOf(source).backoff)[key]
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+/** Infer the editable strategy from the user-owned layer alone. */
+function retryDelayStrategy(source: unknown): RetryDelayStrategy {
+  const policy = recordOf(source)
+  if (!Object.hasOwn(policy, 'backoff')) return 'inherited'
+  const backoff = recordOf(policy.backoff)
+  return backoff.initialDelayMs === backoff.maxDelayMs && backoff.jitterRatio === 0
+    ? 'fixed'
+    : 'exponential'
+}
+
 /** The credential reference this profile resolves keys through. */
 function refFor(
   schema: SettingsSchemaOperations,
@@ -168,6 +210,22 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const root = useMemo(() => schema.rehydrate(namespace.schema), [namespace.schema, schema])
   const node = useMemo(() => schema.nodeAtPath(root, settingsPath), [root, schema, settingsPath])
   const fallback = schema.getPath(namespace.value, settingsPath)
+  const initialRetryPolicy = schema.getPath(draft, ['retryPolicy'])
+  const [retryPolicyOriginallyPresent] = useState(() => initialRetryPolicy !== undefined)
+  const effectiveRetryPolicy = schema.getPath(fallback, ['retryPolicy'])
+  const [retryStrategy, setRetryStrategy] = useState<RetryDelayStrategy>(
+    () => retryDelayStrategy(initialRetryPolicy),
+  )
+  const [retryInitialText, setRetryInitialText] = useState(() => String(backoffNumber(
+    effectiveRetryPolicy,
+    'initialDelayMs',
+    DEFAULT_RETRY_INITIAL_DELAY_MS,
+  )))
+  const [retryMaxText, setRetryMaxText] = useState(() => String(backoffNumber(
+    effectiveRetryPolicy,
+    'maxDelayMs',
+    DEFAULT_RETRY_MAX_DELAY_MS,
+  )))
   const disabled = props.readOnly || busy
   const layout = layoutOf(namespace.ns)
   const keyRef = refFor(schema, namespace, settingsPath, props.provider)
@@ -210,6 +268,53 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     setDraft(current => value === undefined
       ? schema.deletePath(current, [key])
       : schema.setPath(current, [key], value))
+  }
+
+  const retryInitialDelay = retryDelayOf(retryInitialText)
+  const retryMaxDelay = retryDelayOf(retryMaxText)
+  const retryFailure = retryStrategy === 'inherited'
+    ? undefined
+    : retryInitialDelay === undefined || (retryStrategy === 'exponential' && retryMaxDelay === undefined)
+      ? 'retryDelayInvalid' as const
+      : retryStrategy === 'exponential' && retryInitialDelay > (retryMaxDelay as number)
+        ? 'retryDelayOrderInvalid' as const
+        : undefined
+
+  /** Preserve retry count/code choices while replacing only the delay policy. */
+  const setRetryBackoff = (
+    strategy: RetryDelayStrategy,
+    initialText: string,
+    maxText: string,
+  ): void => {
+    setRetryStrategy(strategy)
+    setDraft((current) => {
+      const currentPolicy = recordOf(schema.getPath(current, ['retryPolicy']))
+      if (strategy === 'inherited') {
+        if (!Object.hasOwn(currentPolicy, 'backoff')) return current
+        const nextPolicy = { ...currentPolicy }
+        delete nextPolicy.backoff
+        // Returning to inheritance after this editor introduced the policy
+        // restores the absent user layer instead of leaving a redundant mode.
+        if (!retryPolicyOriginallyPresent
+          && Object.keys(nextPolicy).length === 1 && nextPolicy.mode === 'normal') {
+          return schema.deletePath(current, ['retryPolicy'])
+        }
+        return schema.setPath(current, ['retryPolicy'], nextPolicy)
+      }
+
+      const initialDelayMs = retryDelayOf(initialText)
+      const maxDelayMs = strategy === 'fixed' ? initialDelayMs : retryDelayOf(maxText)
+      if (initialDelayMs === undefined || maxDelayMs === undefined || initialDelayMs > maxDelayMs) return current
+      const effectivePolicy = recordOf(schema.getPath(fallback, ['retryPolicy']))
+      const mode = currentPolicy.mode === 'always' || currentPolicy.mode === 'normal'
+        ? currentPolicy.mode
+        : effectivePolicy.mode === 'always' ? 'always' : 'normal'
+      return schema.setPath(current, ['retryPolicy'], {
+        ...currentPolicy,
+        mode,
+        backoff: { initialDelayMs, maxDelayMs, jitterRatio: 0 },
+      })
+    })
   }
 
   // The model list is validated by the same per-row checker for both families,
@@ -433,6 +538,85 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                 }}
               />
             </div>
+            <div className={styles['retryDelayEditor']}>
+              <div className={styles['field']}>
+                <span className={styles['fieldLabel']}>{t('retryDelayStrategy')}</span>
+                <select
+                  className={`${styles['input']} ${styles['selectInput']}`}
+                  value={retryStrategy}
+                  aria-label={t('retryDelayStrategy')}
+                  disabled={disabled}
+                  onChange={(event) => {
+                    const strategy = event.target.value as RetryDelayStrategy
+                    setRetryBackoff(strategy, retryInitialText, retryMaxText)
+                  }}
+                >
+                  <option value="inherited">{t('retryDelayInherited')}</option>
+                  <option value="fixed">{t('retryDelayFixed')}</option>
+                  <option value="exponential">{t('retryDelayExponential')}</option>
+                </select>
+              </div>
+              {retryStrategy === 'inherited'
+                ? <p className={styles['advancedHint']}>{t('retryDelayInheritedHint')}</p>
+                : (
+                  <div className={styles['retryDelayFields']}>
+                    <div className={styles['field']}>
+                      <span className={styles['fieldLabel']}>
+                        {retryStrategy === 'fixed' ? t('retryDelayFixedMs') : t('retryDelayInitialMs')}
+                      </span>
+                      <input
+                        className={styles['input']}
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        max={String(MAX_RETRY_DELAY_MS)}
+                        step="1"
+                        value={retryInitialText}
+                        aria-label={retryStrategy === 'fixed'
+                          ? t('retryDelayFixedMs')
+                          : t('retryDelayInitialMs')}
+                        aria-invalid={retryFailure !== undefined}
+                        disabled={disabled}
+                        onChange={(event) => {
+                          const next = event.target.value
+                          setRetryInitialText(next)
+                          setRetryBackoff(retryStrategy, next, retryMaxText)
+                        }}
+                      />
+                    </div>
+                    {retryStrategy === 'fixed'
+                      ? null
+                      : (
+                        <div className={styles['field']}>
+                          <span className={styles['fieldLabel']}>{t('retryDelayMaxMs')}</span>
+                          <input
+                            className={styles['input']}
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            max={String(MAX_RETRY_DELAY_MS)}
+                            step="1"
+                            value={retryMaxText}
+                            aria-label={t('retryDelayMaxMs')}
+                            aria-invalid={retryFailure !== undefined}
+                            disabled={disabled}
+                            onChange={(event) => {
+                              const next = event.target.value
+                              setRetryMaxText(next)
+                              setRetryBackoff(retryStrategy, retryInitialText, next)
+                            }}
+                          />
+                        </div>
+                      )}
+                  </div>
+                )}
+              {retryStrategy === 'fixed'
+                ? <p className={styles['advancedHint']}>{t('retryDelayFixedHint')}</p>
+                : retryStrategy === 'exponential'
+                  ? <p className={styles['advancedHint']}>{t('retryDelayExponentialHint')}</p>
+                  : null}
+              {retryFailure === undefined ? null : <p className={styles['error']}>{t(retryFailure)}</p>}
+            </div>
             {/* The protocol sits beside the endpoint it describes, as it does
                 on the create card. */}
             {ownsIdentity
@@ -506,6 +690,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         busy={busy}
         submitDisabled={disabled || layout === 'unknown'
           || (props.credentialOnly !== true && modelFailure !== undefined)
+          || retryFailure !== undefined
           || shownKeyFailure !== undefined
           || (props.credentialRequired === true && keyValue.length === 0)}
         submitLabel={props.submitLabel ?? 'apply'}

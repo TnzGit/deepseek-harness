@@ -229,6 +229,20 @@ describe('idleWatchdog', () => {
     await expect(secondNext).rejects.toBe(stableSignal.reason)
   })
 
+  it('accepts a longer per-demand timeout and reports the effective interval', async () => {
+    vi.useFakeTimers()
+    const pending = Promise.withResolvers<IteratorResult<number>>()
+    using watchdog = idleWatchdog(undefined, 100, 'LLM_STREAM_IDLE_TIMEOUT')
+    const next = watchdog.next({ next: () => pending.promise }, 300)
+
+    await vi.advanceTimersByTimeAsync(299)
+    expect(watchdog.signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')).toMatchObject({ timeoutMs: 300 })
+    pending.reject(watchdog.signal.reason)
+    await expect(next).rejects.toBe(watchdog.signal.reason)
+  })
+
   it('rearms outstanding demand on an out-of-band activity pulse', async () => {
     vi.useFakeTimers()
     const pending = Promise.withResolvers<IteratorResult<number>>()

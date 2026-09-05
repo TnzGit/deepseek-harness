@@ -345,6 +345,7 @@ export class PiAiAdapter extends LlmAdapter {
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
+    const streamFirstChunkTimeoutMs = profile.streamFirstChunkTimeoutMs
 
     try {
       // Provider recounts can shift across equivalent requests, so each bounded
@@ -358,7 +359,9 @@ export class PiAiAdapter extends LlmAdapter {
           : AbortSignal.any([options.signal, consumer.signal])
         using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
         let exhausted = false
+        let receivedProviderChunk = false
         let iterator: AsyncIterator<StreamChunk> | undefined
+        let sdkCompletion: Promise<unknown> | undefined
         try {
           const containsImage = options.messages.some(message => contentHasImage(message.content))
           if (containsImage && !model.input.includes('image')) {
@@ -387,15 +390,20 @@ export class PiAiAdapter extends LlmAdapter {
             // Harness-owned and therefore win collisions.
             headers: requestHeaders(profile.headers),
           })
+          sdkCompletion = events.result()
           iterator = toStreamChunks(events, model.contextWindow)[Symbol.asyncIterator]()
           while (true) {
-            const result = await watchdog.next(iterator)
+            const result = await watchdog.next(
+              iterator,
+              receivedProviderChunk ? streamIdleTimeoutMs : streamFirstChunkTimeoutMs,
+            )
             const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
             if (timeout !== undefined) throw timeout
             if (result.done) {
               exhausted = true
               return
             }
+            receivedProviderChunk = true
             const chunk = result.value
             if (adaptationAttempts < CONTEXT_ADAPT_MAX_ATTEMPTS
               && chunk.type === 'finish' && chunk.reason.kind === 'error'
@@ -411,7 +419,9 @@ export class PiAiAdapter extends LlmAdapter {
           }
         } catch (error: unknown) {
           if (timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
-            throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
+            const phase = receivedProviderChunk ? 'stream idle' : 'first chunk'
+            const timeoutMs = receivedProviderChunk ? streamIdleTimeoutMs : streamFirstChunkTimeoutMs
+            throw new LlmError(`pi-ai ${phase} timeout after ${timeoutMs}ms`, 'TIMEOUT', { cause: error })
           }
           if (options.signal?.aborted) {
             throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
@@ -424,6 +434,22 @@ export class PiAiAdapter extends LlmAdapter {
               await iterator.return?.(undefined)
             } catch (_abortedSdkTeardown) {
               // The stable signal already owns SDK termination; return-time abort cannot add an outcome.
+            }
+            if (sdkCompletion !== undefined) {
+              const teardown = Promise.withResolvers<boolean>()
+              const timer = setTimeout(() => { teardown.resolve(false) }, 5_000)
+              void sdkCompletion.then(
+                () => { teardown.resolve(true) },
+                () => { teardown.resolve(true) },
+              )
+              const confirmed = await teardown.promise
+              clearTimeout(timer)
+              if (!confirmed) {
+                throw new LlmError(
+                  'pi-ai stream cancellation was not confirmed within 5000ms',
+                  'STREAM_CANCELLATION_UNCONFIRMED',
+                )
+              }
             }
           }
         }

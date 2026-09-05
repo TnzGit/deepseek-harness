@@ -10,7 +10,7 @@
 
 ### 重试策略
 
-每个提供方适配器都会提供解析后的路由策略。省略提供方配置时使用有界 normal mode，在首次请求后最多重试五次。分层配置把 `mode` 改为 `always` 后可能残留 `maxRetries` 或 `retryableCodes`；解析过程会忽略这些不再生效的 normal-mode 字段，并捕获纯 always 策略。本服务存储有效策略，但不执行重试。
+每个提供方适配器都会提供解析后的路由策略。省略提供方配置时使用有界 normal mode，在首次请求后最多重试五次。normal 模式可以为某个符合条件的失败 code 单独覆盖重试上限与退避，而不改变该路由的其他失败。分层配置把 `mode` 改为 `always` 后可能残留 `maxRetries`、`retryableCodes` 或 `failureOverrides`；解析过程会忽略这些不再生效的 normal-mode 字段，并捕获纯 always 策略。本服务存储有效策略，但不执行重试。
 
 ### 公开 API
 

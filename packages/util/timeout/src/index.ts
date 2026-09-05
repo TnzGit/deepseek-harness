@@ -71,7 +71,7 @@ export interface IdleWatchdog {
    * @param iterator - iterator whose next value represents provider progress.
    * @returns the iterator's next result.
    */
-  next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>>
+  next<T>(iterator: AsyncIterator<T>, timeoutMs?: number): Promise<IteratorResult<T>>
   /** Rearm an outstanding demand after transport activity that yields no iterator value; otherwise a no-op. */
   pulse(): void
   /** Clear an armed timer; safe to call once at the owning stream's exit. */
@@ -136,21 +136,24 @@ export function idleWatchdog(
   let timer: ReturnType<typeof setTimeout> | undefined
   let outstanding = false
   let disposed = false
+  let armedTimeoutMs = timeoutMs
 
-  const arm = (): void => {
+  const arm = (delayMs = armedTimeoutMs): void => {
+    assertTimerDelay(delayMs, 'idleWatchdog next timeoutMs')
+    armedTimeoutMs = delayMs
     if (timer !== undefined) clearTimeout(timer)
     timer = setTimeout(() => {
-      timeout.abort(new TimeoutReason(code, timeoutMs))
-    }, timeoutMs)
+      timeout.abort(new TimeoutReason(code, delayMs))
+    }, delayMs)
   }
 
   return {
     signal,
-    async next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>> {
+    async next<T>(iterator: AsyncIterator<T>, nextTimeoutMs = timeoutMs): Promise<IteratorResult<T>> {
       if (disposed) throw new Error('idleWatchdog is disposed')
       if (outstanding) throw new Error('idleWatchdog next is already outstanding')
       outstanding = true
-      arm()
+      arm(nextTimeoutMs)
       try {
         return await iterator.next()
       } finally {

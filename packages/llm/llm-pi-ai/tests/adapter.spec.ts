@@ -515,6 +515,19 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/chat/completions'])
     expect(server.closedResponses).toBe(1)
   })
+
+  it('allows a long first chunk wait while retaining a shorter stream idle timeout', async () => {
+    const server = await mockServer([{ events: textEvents, initialDelayMs: 60 }])
+    const ctx = await harness(server.url, {
+      streamFirstChunkTimeoutMs: 200,
+      streamIdleTimeoutMs: 20,
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
 })
 
 describe('provider profile lifecycle', () => {
@@ -1002,6 +1015,9 @@ describe('provider profile lifecycle', () => {
       { streamIdleTimeoutMs: 0 },
       { streamIdleTimeoutMs: Number.NaN },
       { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
+      { streamFirstChunkTimeoutMs: 0 },
+      { streamFirstChunkTimeoutMs: Number.NaN },
+      { streamFirstChunkTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
       { maxRequestImageBytes: 0 },
       { maxRequestImageBytes: 1.5 },
       { maxRequestImageBytes: Number.NaN },
@@ -1087,6 +1103,18 @@ describe('provider profile lifecycle', () => {
     expect(() => resolveProfiles({
       openai: { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
     })).toThrow(/streamIdleTimeoutMs.*no greater/)
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 12_000,
+    })
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000, streamFirstChunkTimeoutMs: 900_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 900_000,
+    })
   })
 })
 
