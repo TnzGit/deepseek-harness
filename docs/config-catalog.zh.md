@@ -1106,8 +1106,9 @@ export interface PiAiProviderProfile {
   defaultContextWindow?: number
   /**
    * Output capability for a model this route lists that neither the entry nor
-   * the installed catalog sizes (default 32,768). This sizes the model; it
-   * never becomes a per-request cap on its own.
+   * the installed catalog sizes (default 32,768). pi-ai also uses the resolved
+   * value as the request cap when a call names none, so the adapter exposes it
+   * as the effective default for request replay and context-pressure accounting.
    */
   defaultMaxTokens?: number
   /**
@@ -1121,6 +1122,12 @@ export interface PiAiProviderProfile {
    * to answer instead.
    */
   defaultInput?: PiAiModality[]
+  /**
+   * Reasoning capability for hand-declared models that neither their entry nor
+   * the installed catalog describes. Individual model declarations win, and
+   * installed catalog metadata stays authoritative for known model ids.
+   */
+  defaultReasoningEfforts?: false | PiAiReasoningEfforts
   /** Provider request headers; Harness attribution wins reserved names. */
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
@@ -1137,6 +1144,8 @@ export interface PiAiProviderProfile {
   websocketConnectTimeoutMs?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
+  /** Maximum wait for the first provider stream chunk; defaults to the stream idle timeout. */
+  streamFirstChunkTimeoutMs?: number
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
@@ -1161,10 +1170,9 @@ export interface PiAiModelProfile {
   /** Maximum combined request and response context in tokens. */
   contextWindow?: number
   /**
-   * Maximum output tokens. Configuring one also makes it this model's
-   * per-request default; a value inherited from the installed catalog, or the
-   * route's fallback, is the model's capability and never becomes a request
-   * default on its own.
+   * Maximum output tokens. pi-ai uses the resolved model value when a request
+   * omits its own cap, so every resolved source also becomes the effective
+   * per-request default exposed through the Harness seam.
    */
   maxTokens?: number
   /**
@@ -1296,7 +1304,7 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 依赖：`Api`（`@earendil-works/pi-ai`）· `CacheRetention`（`@earendil-works/pi-ai`）· `Model`（`@earendil-works/pi-ai`）· `ModelThinkingLevel`（`@earendil-works/pi-ai`）· `OpenAICompletionsCompat`（`@earendil-works/pi-ai`）· [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets`（`@earendil-works/pi-ai`）· `Transport`（`@earendil-works/pi-ai`)
 
-来源：[`packages/llm/llm-pi-ai/src/config.ts:213`](../packages/llm/llm-pi-ai/src/config.ts)
+来源：[`packages/llm/llm-pi-ai/src/config.ts:224`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 

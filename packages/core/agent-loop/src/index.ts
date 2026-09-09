@@ -118,6 +118,7 @@ async function raceAbortCall<T>(
   id: SessionId,
   releaseAbandoned?: (value: T) => void,
 ): Promise<T> {
+  const wasAborted = (): boolean => signal.aborted
   if (signal.aborted) {
     throw signal.reason instanceof Error
       ? signal.reason
@@ -127,7 +128,7 @@ async function raceAbortCall<T>(
   try {
     return await raceAbort(pending, signal, id)
   } catch (error: unknown) {
-    if (signal.aborted && releaseAbandoned !== undefined) {
+    if (wasAborted() && releaseAbandoned !== undefined) {
       void pending.then(releaseAbandoned, () => undefined)
     }
     throw error

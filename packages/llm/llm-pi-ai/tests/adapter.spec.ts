@@ -774,7 +774,7 @@ describe('provider profile lifecycle', () => {
     expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
   })
 
-  it('dispatches custom Qwen chat-template thinking state and disables it for auxiliary requests', async () => {
+  it('dispatches route-default Qwen thinking state and disables it for auxiliary requests', async () => {
     const server = await mockServer([{ events: textEvents }, { events: textEvents }, { events: textEvents }])
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
@@ -785,17 +785,17 @@ describe('provider profile lifecycle', () => {
           api: 'openai-completions',
           baseURL: `${server.url}/v1`,
           reasoning: 'xhigh',
+          defaultReasoningEfforts: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
+          compat: {
+            thinkingFormat: 'chat-template',
+            chatTemplateKwargs: {
+              enable_thinking: { $var: 'thinking.enabled' },
+              reasoning_effort: { $var: 'thinking.effort', omitWhenOff: true },
+              preserve_thinking: true,
+            },
+          },
           models: [{
             id: 'qwen-custom',
-            reasoningEfforts: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
-            compat: {
-              thinkingFormat: 'chat-template',
-              chatTemplateKwargs: {
-                enable_thinking: { $var: 'thinking.enabled' },
-                reasoning_effort: { $var: 'thinking.effort', omitWhenOff: true },
-                preserve_thinking: true,
-              },
-            },
           }],
         },
       },

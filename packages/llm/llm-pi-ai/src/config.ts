@@ -145,6 +145,12 @@ export interface PiAiProviderProfile {
    * to answer instead.
    */
   defaultInput?: PiAiModality[]
+  /**
+   * Reasoning capability for hand-declared models that neither their entry nor
+   * the installed catalog describes. Individual model declarations win, and
+   * installed catalog metadata stays authoritative for known model ids.
+   */
+  defaultReasoningEfforts?: false | PiAiReasoningEfforts
   /** Provider request headers; Harness attribution wins reserved names. */
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
@@ -320,6 +326,7 @@ const profile = z.object({
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
+  defaultReasoningEfforts: z.union([z.const(false), reasoningEfforts]),
   headers: z.dict(z.string()),
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
@@ -448,6 +455,9 @@ export function resolveProfiles(
       ...source.modelOverrides === undefined ? {} : { modelOverrides: source.modelOverrides },
       ...source.compat === undefined ? {} : { compat: source.compat },
       defaultInput,
+      ...source.defaultReasoningEfforts === undefined
+        ? {}
+        : { defaultReasoningEfforts: source.defaultReasoningEfforts },
       defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
       defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
     })

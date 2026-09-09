@@ -35,6 +35,12 @@
  *         # Reasoning dialect for a URL pi-ai cannot recognize.
  *         compat:
  *           thinkingFormat: deepseek
+ *         # Fallback for future model ids this installed catalog cannot describe.
+ *         defaultReasoningEfforts:
+ *           off:
+ *           low: low
+ *           medium: medium
+ *           xhigh: xhigh
  *         models:
  *           - id: acme-large
  *             name: Acme Large
@@ -44,8 +50,7 @@
  *             name: Acme Think
  *             contextWindow: 262144
  *             maxTokens: 32768
- *             # key = selectable level, value = wire spelling; only off may
- *             # leave the value empty (supported, send nothing).
+ *             # Optional exact-model override of the route fallback.
  *             reasoningEfforts:
  *               off:
  *               high: high

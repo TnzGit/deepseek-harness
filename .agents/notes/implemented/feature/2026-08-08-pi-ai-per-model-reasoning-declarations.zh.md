@@ -14,6 +14,8 @@ Status: implemented
 
 `PiAiModelProfile` 新增 `reasoningEfforts`：**每个键是选择器提供的一个档位，其值是分派在协议中发送的拼写**。该声明会转换为 pi-ai 的 `Model.reasoning` + `thinkingLevelMap`，七个档位全部显式决定——已声明的档位携带自己的协议值，未声明的档位一律固定为 `null`——因此 profile 作者永远不需要了解 pi-ai 那条不对称的默认规则（键缺席对五个基础档位意味着「支持」，对 `xhigh`/`max` 却意味着「不支持」）。`off` 是唯一的三态键：不写，选择器不提供 Off，显式请求 Off 会被拒绝（不点名档位的请求仍会不带参数地发出，提供方保留自己的默认行为）；声明而不给值，则提供 Off，分派什么也不发送（`deepseek` 方言发送 `thinking: {type: "disabled"}`）；声明并给值，该值就在协议中发送。`false` 声明一个不具备推理能力的模型；空声明会被拒绝，而不是去猜。「禁用」的拼写取 `false` 而非 `{}`，因为 schemastery 会把缺席的字典物化成 `{}`——只有 `z.union([z.const(false), dict])` 才能让缺席、禁用与已声明三态保持可区分；而裸写的 `reasoningEfforts:`（YAML null）会不经校验地从该 union 溜过去，因此解析对它显式拒绝。
 
+`defaultReasoningEfforts` 在路由级承载同一种声明，但只作为已安装 catalog 未收录模型的最终回退值。解析顺序是：确切模型声明 → 已安装 catalog 能力 → 路由回退值 → 不提供推理元数据。这样既保留 catalog 的权威性，也能让模型 id 随部署变化的自托管路由继续使用已知协议能力。Models 设置卡片可把路由回退值和每个模型覆盖项设为继承、关闭或开启并明确档位；实际选中的档位仍归输入框的逐会话设置与 profile 可选的 `reasoning` 默认值所有。
+
 `compat.thinkingFormat` 与 `compat.supportsReasoningEffort` 变为两级可配置——路由级（作为其模型的默认值）与模型级（逐字段胜出）——解析顺序为模型 → 路由 → 已安装 catalog 条目 → pi-ai 按 URL 得出的猜测。`thinkingFormat` 经 `Record<UpstreamUnion, true>` 漂移门禁钉在 pi-ai 的联合类型上，因此新增格式的 pi-ai 升级会编译失败，直到新成员被归类（对照已发布的 0.84.1 tarball 验证过：其 `thinkingFormat` 联合类型相对钉住的 0.82.1 新增了 `baseten`）。`compat` 承载哪些字段、每个字段由哪些协议接受、以及无法读取的键如何被拒绝，归 [[2026-08-18-pi-ai-wire-compat-surface]] 所有；上面这条两级解析顺序正是该面所推广的东西。
 
 `modelOverrides` 就地重塑单个 catalog 模型而不替换所服务的集合：键 = catalog 模型 id，值 = 去掉 `id` 的 `models` 条目，物化时把覆盖交给既有的条目路径，因此容量、档位、compat 与请求默认值语义完全一致。与忽略未知 id 的 Pi 自有配置层不同，凡是落不到任何地方的覆盖都会被拒绝——与 `models` 列表并存、写在手工声明的路由上、点名未知模型，或在值里夹带 `id`（schema 会放行未知键，被夹带的 id 会悄悄把模型改名）。
@@ -24,10 +26,11 @@ Status: implemented
 - **裸档位列表**（`reasoningEfforts: [off, high]`）。表达不了协议侧改名，而 catalog 自己的 map 证明改名真实存在：1230 条已安装 map 条目里有 66 条不是恒等映射（`off→none`、`minimal→low`、`low→LOW`、`high→default`）。
 - **用 `{}` 作为禁用拼写。** 无法实现：schemastery 会把缺席的字典物化成 `{}`，于是每个没写该字段的模型都会被强制禁用。
 - **把这件事并进路由级的 `reasoning` 旋钮。** 那个旋钮是*默认选择*，不是能力集合；它保留下来，而已声明模型的档位如今约束着它能选什么。
+- **发现接口返回新 id 时复制上一个模型的声明。** 相邻行不能证明新模型的能力，而且删掉旧行后保护也会随之消失。显式路由回退值只记录一次运维人员对端点的认识。
 
 ## 后果
 
 - 输入框的档位面板对手工声明的模型直接可用，UI 零改动——`resolveModelInfo` 经 catalog 元数据所走的同一 seam 报告已声明档位（由 `declared-reasoning` web 场景钉住）。
-- #1860 暂缓的缺口——模型接不住的路由级档位会让发往它的请求失败——如今有了运维侧补救：对齐该模型的 `reasoningEfforts`，或去掉路由默认值。
+- #1860 暂缓的缺口——模型接不住的路由级档位会让发往它的请求失败——可直接在 Models 页面补救：对齐确切模型的 `reasoningEfforts`、为未收录 id 声明路由回退值，或移除所选默认档位。
 - 刻意不提供任何把单个 map 键或 compat 字段交还给「catalog 原本怎么说」的拼写：这份声明就是对外提供的全部，要保留某个 catalog 值就得重述它。README 记载了这一点。
 - `verify-package-invariants` 原封未动：该功能新增的是配置解析，没有新事件，也没有可变的运行时关系。

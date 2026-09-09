@@ -19,6 +19,11 @@ afterEach(cleanup)
 const t: ModelsSectionInjected['t'] = key => en[key]
 
 const PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages']
+const REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const ReasoningEfforts = Schema.union([
+  Schema.const(false),
+  Schema.dict(Schema.union([Schema.string(), Schema.const(null)]), Schema.union(REASONING_LEVELS)),
+])
 
 /** The pi-ai profile shape as the host serializes it, including the layer-1 fields. */
 const PiAiConfig = Schema.object({
@@ -33,7 +38,9 @@ const PiAiConfig = Schema.object({
       name: Schema.string(),
       contextWindow: Schema.number(),
       maxTokens: Schema.number(),
+      reasoningEfforts: ReasoningEfforts,
     })),
+    defaultReasoningEfforts: ReasoningEfforts,
     reasoning: Schema.union(['off', 'high']),
   })),
 })
@@ -215,6 +222,72 @@ describe('model list editing', () => {
       expectedRevision: 3,
       ops: [{ op: 'set', path: ['providers', 'openai', 'models'], value: [{ id: 'acme-large', contextWindow: 65_536 }] }],
     })
+  })
+
+  it('writes a durable route fallback and an exact model reasoning override', async () => {
+    const { mutate } = await mountSection({
+      providers: { openai: { baseURL: 'https://proxy.example/v1', models: [{ id: 'rolling-model' }] } },
+    })
+    openEditor('openai')
+
+    fireEvent.change(screen.getByLabelText(en.defaultReasoningCapability), {
+      target: { value: 'enabled' },
+    })
+    fireEvent.click(screen.getByLabelText(`${en.reasoningLevel} medium`))
+    fireEvent.click(screen.getByLabelText(`${en.reasoningLevel} xhigh`))
+
+    expandModel(1)
+    fireEvent.change(screen.getByLabelText(`${en.modelReasoningCapability} 1`), {
+      target: { value: 'enabled' },
+    })
+    fireEvent.click(screen.getByLabelText(`${en.reasoningLevel} medium 1`))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(mutate).ops).toEqual([
+      {
+        op: 'set',
+        path: ['providers', 'openai', 'models'],
+        value: [{ id: 'rolling-model', reasoningEfforts: { off: null, low: 'low', medium: 'medium' } }],
+      },
+      {
+        op: 'set',
+        path: ['providers', 'openai', 'defaultReasoningEfforts'],
+        value: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
+      },
+    ])
+  })
+
+  it('can disable model reasoning and restore provider inheritance', async () => {
+    const { mutate } = await mountSection({
+      providers: {
+        openai: {
+          baseURL: 'https://proxy.example/v1',
+          defaultReasoningEfforts: { off: null, low: 'low' },
+          models: [{ id: 'plain', reasoningEfforts: { off: null, high: 'custom-high' } }],
+        },
+      },
+    })
+    openEditor('openai')
+
+    fireEvent.change(screen.getByLabelText(en.defaultReasoningCapability), {
+      target: { value: 'inherit' },
+    })
+    expandModel(1)
+    fireEvent.change(screen.getByLabelText(`${en.modelReasoningCapability} 1`), {
+      target: { value: 'disabled' },
+    })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(mutate).ops).toEqual([
+      {
+        op: 'set',
+        path: ['providers', 'openai', 'models'],
+        value: [{ id: 'plain', reasoningEfforts: false }],
+      },
+      { op: 'unset', path: ['providers', 'openai', 'defaultReasoningEfforts'] },
+    ])
   })
 
   it('names a duplicate model id in the edit flow too', async () => {
@@ -735,18 +808,22 @@ describe('hand-declared providers', () => {
     expect(set).toHaveBeenCalledWith({ ref: 'ACME_GATEWAY_API_KEY', value: 'gw-key' })
   })
 
-  it('scopes each card to fields a provider can actually own', async () => {
-    // Reasoning effort is a per-MODEL capability and the
-    // models under one provider disagree about it, so a provider-scoped
-    // control could only be set to a value some of them reject — which would
-    // take the whole provider out of the picker. The composer's model picker
-    // owns the choice, and a switch there records provider+model+effort together.
+  it('scopes route identity separately from model capability defaults', async () => {
+    // The route-level control is a fallback only for uncatalogued models. It
+    // does not replace the exact-model effort picker in the composer.
     const fields = () => [...document.querySelectorAll('input,select')]
       .map(el => el.getAttribute('aria-label')).filter(Boolean)
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
-    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.keyInput])
+    expect(fields()).toEqual([
+      en.customRoute,
+      en.customDisplayName,
+      en.baseUrl,
+      en.customApi,
+      en.keyInput,
+      en.defaultReasoningCapability,
+    ])
     cleanup()
 
     // A shipped route's models each carry their own protocol, so its editor
@@ -754,7 +831,7 @@ describe('hand-declared providers', () => {
     await mountSection({ providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } })
     openEditor('openai')
     fireEvent.click(screen.getByText(en.customized))
-    expect(fields()).toEqual([en.keyInput, en.baseUrl, en.retryDelayStrategy])
+    expect(fields()).toEqual([en.keyInput, en.baseUrl, en.retryDelayStrategy, en.defaultReasoningCapability])
     cleanup()
 
     // A hand-declared route named its own protocol at creation, so editing it
@@ -770,6 +847,7 @@ describe('hand-declared providers', () => {
       en.baseUrl,
       en.retryDelayStrategy,
       en.customApi,
+      en.defaultReasoningCapability,
     ])
   })
 

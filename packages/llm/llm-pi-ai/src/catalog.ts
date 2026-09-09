@@ -597,6 +597,8 @@ export interface RouteCatalogRequest {
   defaultMaxTokens: number
   /** Modalities for a model neither the entry nor the catalog declares. */
   defaultInput: Model<Api>['input']
+  /** Reasoning capability for a model neither its entry nor the installed catalog describes. */
+  defaultReasoningEfforts?: false | PiAiReasoningEfforts
 }
 
 /** Report a route the deployment cannot serve, naming the settings key at fault. */
@@ -647,8 +649,11 @@ function resolveModelReasoning(
   provider: string,
   entry: PiAiModelProfile,
   base: Model<Api> | undefined,
+  routeDefault: false | PiAiReasoningEfforts | undefined,
 ): ModelReasoning {
-  const efforts = entry.reasoningEfforts
+  const efforts = entry.reasoningEfforts === undefined
+    ? (base === undefined ? routeDefault : undefined)
+    : entry.reasoningEfforts
   if (efforts === undefined) {
     // Reasoning rides the installed entry or is absent: a bare capability flag
     // would make pi-ai advertise effort levels with no `thinkingLevelMap` to
@@ -865,7 +870,7 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
       cost: base?.cost ?? NO_COST,
       contextWindow,
       maxTokens,
-      ...resolveModelReasoning(provider, entry, base),
+      ...resolveModelReasoning(provider, entry, base, request.defaultReasoningEfforts),
       ...resolveModelCompat(provider, entry, request.compat, base, api),
     }
   })

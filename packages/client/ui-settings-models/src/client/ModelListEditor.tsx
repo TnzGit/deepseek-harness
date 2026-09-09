@@ -20,6 +20,7 @@ import type { DiscoveredModelView, IApiClient } from '@deepseek-ai/dsh-api-remot
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { formatCapacity, parseCapacity } from './DeepSeekModelsEditor.tsx'
 import type { DeepSeekModelDraft } from './DeepSeekModelsEditor.tsx'
+import { ReasoningEffortsEditor } from './ReasoningEffortsEditor.tsx'
 import { messageOf } from './store.ts'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
@@ -70,6 +71,10 @@ export interface ModelListEditorProps {
   overridden?: boolean
   /** Replace the drafted rows. */
   onChange: (models: ModelDraft[]) => void
+  /** Route fallback for uncatalogued models; absent keeps catalog-only discovery. */
+  defaultReasoningEfforts?: unknown
+  /** Replace or remove the route fallback. */
+  onDefaultReasoningEffortsChange?: (value: false | Record<string, string | null> | undefined) => void
   /** Remove the user-owned array and return to inheritance; absent on a create. */
   onReset?: () => void
   /** Endpoint facts for the fetch action. */
@@ -210,7 +215,7 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
     })
   }
 
-  const patch = (index: number, next: Record<string, string | number | undefined>): void => {
+  const patch = (index: number, next: Record<string, unknown>): void => {
     onChange(models.map((model, at) => {
       if (at !== index) return model
       // Rebuilt rather than spread over: an emptied optional field has to leave
@@ -343,6 +348,17 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
         </button>
       </div>
       {models.length === 0 ? <p className={styles['modelEmpty']}>{t('modelsEmpty')}</p> : null}
+      {props.onDefaultReasoningEffortsChange === undefined
+        ? null
+        : (
+          <ReasoningEffortsEditor
+            value={props.defaultReasoningEfforts}
+            onChange={props.onDefaultReasoningEffortsChange}
+            routeDefault
+            t={t}
+            disabled={disabled}
+          />
+        )}
       {models.map((model, index) => (
         <div key={index} className={styles['modelEntry']}>
           <div className={styles['modelRow']}>
@@ -429,6 +445,13 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
                     onChange={(event) => { editCapacity(index, 'maxTokens', event.target.value) }}
                   />
                 </label>
+                <ReasoningEffortsEditor
+                  value={model['reasoningEfforts']}
+                  onChange={(value) => { patch(index, { reasoningEfforts: value }) }}
+                  suffix={String(index + 1)}
+                  t={t}
+                  disabled={disabled}
+                />
               </div>
             )
             : null}

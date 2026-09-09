@@ -12,11 +12,9 @@
  * display name and wire protocol of a pi-ai route the adapter does not ship —
  * the two fields the create card asked that route for, editable here for the
  * same reason).
- * Reasoning effort is deliberately absent: it is a per-MODEL capability, and
- * the models under one provider disagree about it, so a provider-scoped
- * control can only be set to a value some of them reject. The composer's
- * model picker offers each model its own levels; `settings.yaml` keeps the
- * profile field for a deployment that knows its route. Retry counts and
+ * The pi-ai model editor exposes exact-model reasoning capabilities and a
+ * route fallback used only for models absent from the installed catalog; the
+ * composer's model picker owns the selected effort. Retry counts and
  * eligible codes, plus every other advanced field, stay owned by
  * `settings.yaml`. Profile edits land as minimal `settings.mutate`
  * path ops against the stored section — the card names only the fields it can
@@ -655,7 +653,20 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                   defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}
                 />
               )
-              : <ModelListEditor {...catalogProps} probe={probe} probeBlocked={keyFailure} api={api} />}
+              : (
+                <ModelListEditor
+                  {...catalogProps}
+                  defaultReasoningEfforts={schema.getPath(draft, ['defaultReasoningEfforts'])}
+                  onDefaultReasoningEffortsChange={(value) => {
+                    setDraft(current => value === undefined
+                      ? schema.deletePath(current, ['defaultReasoningEfforts'])
+                      : schema.setPath(current, ['defaultReasoningEfforts'], value))
+                  }}
+                  probe={probe}
+                  probeBlocked={keyFailure}
+                  api={api}
+                />
+              )}
           </div>
         </details>}
       </>

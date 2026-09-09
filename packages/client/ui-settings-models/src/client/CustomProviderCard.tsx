@@ -14,11 +14,9 @@
  * and at least one model — are required here rather than at load, so the
  * failure names the field while the user is still looking at it.
  *
- * There is deliberately no reasoning-effort control, here or on the editor
- * card: effort is a per-MODEL capability, and the models under one provider
- * disagree about it, so a provider-scoped control can only be set to a value
- * some of them reject. The composer's model picker offers each model its own
- * levels instead.
+ * Reasoning capability is declared per model. A separate route fallback may
+ * cover future hand-declared model ids without overriding installed catalog
+ * metadata; the composer's model picker owns the selected effort.
  */
 
 import { useState } from 'react'
@@ -84,6 +82,8 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const [protocol, setProtocol] = useState(protocols[0] ?? '')
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
+  const [defaultReasoningEfforts, setDefaultReasoningEfforts]
+    = useState<false | Record<string, string | null> | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   /**
@@ -142,6 +142,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         ...storesKey ? { apiKeyEnv: keyRef } : {},
         api: protocol,
         baseURL,
+        ...defaultReasoningEfforts === undefined ? {} : { defaultReasoningEfforts },
         models: models.map(model => ({ ...model })),
       }
       const response = await api.settings.mutate({
@@ -267,6 +268,8 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       <ModelListEditor
         models={models}
         onChange={setModels}
+        defaultReasoningEfforts={defaultReasoningEfforts}
+        onDefaultReasoningEffortsChange={setDefaultReasoningEfforts}
         probe={{
           settingsNs: NS,
           baseURL,
