@@ -160,6 +160,7 @@
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
         allowRemoteAdmin: !!js ctx.webStartup.allowRemoteAdmin
+        allowUnauthenticated: !!js ctx.webStartup.allowUnauthenticated
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
@@ -188,6 +189,7 @@
         # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
         trustedHosts: !!js ctx.webRuntime.trustedHosts
         allowRemoteAdmin: !!js ctx.webRuntime.allowRemoteAdmin
+        allowUnauthenticated: !!js ctx.webRuntime.allowUnauthenticated
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

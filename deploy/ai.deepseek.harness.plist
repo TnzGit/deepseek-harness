@@ -26,6 +26,8 @@
     <string>1</string>
     <key>DSH_ALLOW_REMOTE_ADMIN</key>
     <string>1</string>
+    <key>DSH_ALLOW_LAN_NO_AUTH</key>
+    <string>1</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>

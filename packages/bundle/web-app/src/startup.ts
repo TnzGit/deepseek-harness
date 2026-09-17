@@ -23,6 +23,8 @@ export const WEB_STARTUP_SERVICE = 'webStartup'
 const ALLOW_LAN_ENV = 'DSH_ALLOW_LAN'
 /** Explicit admin opt-in for trusted non-loopback configuration APIs. */
 const ALLOW_REMOTE_ADMIN_ENV = 'DSH_ALLOW_REMOTE_ADMIN'
+/** Explicitly disable browser-session auth for a trusted LAN-only deployment. */
+const ALLOW_LAN_NO_AUTH_ENV = 'DSH_ALLOW_LAN_NO_AUTH'
 
 /** What the web rows read from {@link WEB_STARTUP_SERVICE}. */
 export interface WebStartupValues {
@@ -36,6 +38,8 @@ export interface WebStartupValues {
   trustedHosts: string[]
   /** Whether this invocation explicitly permits trusted LAN clients to use remote admin APIs. */
   allowRemoteAdmin: boolean
+  /** Whether this LAN launch explicitly disables browser-session authentication. */
+  allowUnauthenticated: boolean
 }
 
 /** The web flag family, as commander parsed it. */
@@ -92,6 +96,9 @@ export function apply(ctx: Context): void {
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
       allowRemoteAdmin: process.env[ALLOW_REMOTE_ADMIN_ENV] === '1',
+      allowUnauthenticated: options.host === '0.0.0.0'
+        && process.env[ALLOW_LAN_ENV] === '1'
+        && process.env[ALLOW_LAN_NO_AUTH_ENV] === '1',
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

@@ -83,6 +83,8 @@ export interface ConnectionConfig {
   trustedHosts?: string[]
   /** Allow trusted non-loopback authorities to use the configuration plane. */
   allowRemoteAdmin?: boolean
+  /** Disable browser-session auth; intended only with explicit LAN opt-in. */
+  allowUnauthenticated?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -93,6 +95,7 @@ export const Config: z<ConnectionConfig> = z.object({
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
   allowRemoteAdmin: z.boolean().default(false),
+  allowUnauthenticated: z.boolean().default(false),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
@@ -109,6 +112,8 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // The Loader resolves schema defaults; hand-built test contexts may pass none.
   const trustedHosts = config?.trustedHosts ?? []
   const allowRemoteAdmin = config?.allowRemoteAdmin === true || process.env.DSH_ALLOW_REMOTE_ADMIN === '1'
+  const allowUnauthenticated = config?.allowUnauthenticated === true
+    || (process.env.DSH_ALLOW_LAN === '1' && process.env.DSH_ALLOW_LAN_NO_AUTH === '1')
   const cookieMaxAgeDays = config?.cookieMaxAgeDays ?? 30
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
   // Config boundary: a malformed entry fails the load loudly here rather than
@@ -120,6 +125,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
     trustedHosts,
     await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
     allowRemoteAdmin,
+    allowUnauthenticated,
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
