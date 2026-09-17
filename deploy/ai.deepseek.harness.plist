@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.deepseek.harness</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Volumes/ExternalIntel/EPlayground/deepseek-harness-upgrade-015/apps/cli/lib/bin.js</string>
+    <string>web</string>
+    <string>--patch</string>
+    <string>/Users/m4mini/.dsh/deploy/exa-web-search.cordis.yml</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>3080</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Volumes/ExternalIntel/EPlayground/deepseek-harness-upgrade-015</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DUAL_2080TI_API_KEY</key>
+    <string>local-dual2080ti</string>
+    <key>DSH_ALLOW_LAN</key>
+    <string>1</string>
+    <key>DSH_ALLOW_REMOTE_ADMIN</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/m4mini/Library/Logs/DeepSeekHarness/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/m4mini/Library/Logs/DeepSeekHarness/stderr.log</string>
+</dict>
+</plist>

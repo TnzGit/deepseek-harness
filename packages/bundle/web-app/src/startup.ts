@@ -19,6 +19,11 @@ export const inject = ['cmdlineArgs']
 /** Service provided by this ordinary plugin and injected by flag-configured rows. */
 export const WEB_STARTUP_SERVICE = 'webStartup'
 
+/** Explicit local opt-in for binding the Web UI beyond loopback. */
+const ALLOW_LAN_ENV = 'DSH_ALLOW_LAN'
+/** Explicit admin opt-in for trusted non-loopback configuration APIs. */
+const ALLOW_REMOTE_ADMIN_ENV = 'DSH_ALLOW_REMOTE_ADMIN'
+
 /** What the web rows read from {@link WEB_STARTUP_SERVICE}. */
 export interface WebStartupValues {
   /** Whether this invocation opens the default browser after startup. */
@@ -29,6 +34,8 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /** Whether this invocation explicitly permits trusted LAN clients to use remote admin APIs. */
+  allowRemoteAdmin: boolean
 }
 
 /** The web flag family, as commander parsed it. */
@@ -71,7 +78,9 @@ export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0') {
+    if (options.host === '0.0.0.0'
+      && process.env[ALLOW_LAN_ENV] !== '1'
+      && process.env[ALLOW_REMOTE_ADMIN_ENV] !== '1') {
       program.error('error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
     }
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
@@ -82,6 +91,7 @@ export function apply(ctx: Context): void {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      allowRemoteAdmin: process.env[ALLOW_REMOTE_ADMIN_ENV] === '1',
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

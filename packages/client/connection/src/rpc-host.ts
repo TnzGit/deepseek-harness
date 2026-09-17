@@ -32,6 +32,21 @@ const INVALID_REQUEST_RPC_ID = RpcId('invalid-request')
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
+/** Operations that mutate or disclose Host configuration. */
+const PRIVILEGED_METHODS = new Set([
+  'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
+  'host.pickDirectory', 'host.openPath',
+  'settings.describe', 'settings.openSettingsDocument', 'settings.update', 'settings.replace', 'settings.mutate',
+  'credentials.describe', 'credentials.set', 'credentials.unset', 'llm.discoverModels',
+])
+
+/** Privileged operations explicitly safe for trusted LAN administrators. */
+const REMOTE_ADMIN_METHODS = new Set([
+  'agentPreset.read', 'agentPreset.copy', 'agentPreset.remove',
+  'settings.describe', 'settings.update', 'settings.replace', 'settings.mutate',
+  'credentials.describe', 'credentials.set', 'credentials.unset', 'llm.discoverModels',
+])
+
 interface ConnectionRpcInterceptor {
   readonly matches: ConnectionRpcEndpointMatcher
   readonly fetchHandler: ConnectionFetchHandler
@@ -71,6 +86,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    private readonly allowRemoteAdmin = false,
   ) {
     super(ctx, 'connection')
   }
@@ -97,6 +113,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
     if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
     return this.browserAuth.isAuthenticated(request) ? undefined : 401
+  }
+
+  /** Keep desktop actions loopback-only while allowing the explicit LAN admin subset. */
+  methodRejection(endpoint: string, request: ConnectionTrustRequest): ConnectionRequestRejection {
+    if (!PRIVILEGED_METHODS.has(endpoint)) return undefined
+    if (isTrustedApiRequest(request, [])) return undefined
+    if (this.allowRemoteAdmin && REMOTE_ADMIN_METHODS.has(endpoint)
+      && isTrustedApiRequest(request, this.trustedHosts)) return undefined
+    return 403
   }
 
   /** Authenticate an index request through the process-token exchange or cookie. */
@@ -161,7 +186,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     handler: ConnectionRpcHandler,
   ): () => Promise<void> {
     assertChannel(channel)
-    const fetchHandler = rpcFetchHandler(channel, handler)
+    const fetchHandler = rpcFetchHandler(channel, handler, (endpoint, request) => this.methodRejection(endpoint, request))
     const route: WebRoute = {
       kind: 'prefix',
       path: channel,
@@ -192,7 +217,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
     const interceptor: ConnectionRpcInterceptor = {
       matches,
-      fetchHandler: rpcFetchHandler(channel, handler),
+      fetchHandler: rpcFetchHandler(channel, handler, (endpoint, request) => this.methodRejection(endpoint, request)),
     }
     return owner.effect(() => {
       if (this.interceptors.has(channel)) {
@@ -209,6 +234,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
 function rpcFetchHandler(
   channel: string,
   handler: ConnectionRpcHandler,
+  authorize: (endpoint: string, request: ConnectionTrustRequest) => ConnectionRequestRejection,
 ): ConnectionFetchHandler {
   return {
     requestBodyMode: () => 'buffered',
@@ -241,6 +267,11 @@ function rpcFetchHandler(
           message: `method ${JSON.stringify(message.method)} does not match endpoint ${JSON.stringify(endpoint)}`,
           details: { issues: [] },
         })
+      }
+
+      const rejection = authorize(endpoint, request)
+      if (rejection !== undefined) {
+        return new Response('forbidden', { status: rejection })
       }
 
       try {

@@ -55,6 +55,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Whether this launch explicitly permits trusted LAN clients to use remote admin APIs. */
+  allowRemoteAdmin?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -62,6 +64,7 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  allowRemoteAdmin: z.boolean().default(false),
 })
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
@@ -70,6 +73,8 @@ export interface WebRuntimeValues {
   lanAddresses: string[]
   /** LAN literals followed by explicit invocation authorities. */
   trustedHosts: string[]
+  /** Whether trusted non-loopback clients may use the configuration plane. */
+  allowRemoteAdmin?: boolean
 }
 
 /** Environment variable naming the canonical local URL of this Web GUI. */
@@ -223,12 +228,18 @@ export const internals: {
  * @param config - validated {@link Config}.
  */
 export function apply(ctx: Context, config: Config): void {
-  const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const runtime: WebRuntimeValues = {
+    ...resolveLanTrust(ctx.webServer.host, config.trustedHosts),
+    allowRemoteAdmin: config.allowRemoteAdmin === true,
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
+  ctx.on('webserver/index-inject', (table) => {
+    table.push({ kind: 'global', name: '__DSH_REMOTE_ADMIN__', value: runtime.allowRemoteAdmin })
+  })
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
   if (config.surfaceContext) {
     ctx.inject(['systemPrompt'], (promptCtx) => {

@@ -55,7 +55,11 @@ export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
   // Resolved once here, where `remote` is declared in this plugin's own
   // `inject`; the binder hands the same answer to every scope it binds.
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+  // A trusted LAN administrator is explicitly opted in by the Host. The flag
+  // is injected into the authenticated page; the Host still enforces the
+  // method-level allowlist, so an ordinary remote browser remains memory-only.
+  const remoteAdmin = (globalThis as { __DSH_REMOTE_ADMIN__?: unknown }).__DSH_REMOTE_ADMIN__ === true
+  const persistence = ctx.remote.$host.isLoopback || remoteAdmin ? 'host' : 'memory'
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [
