@@ -52,8 +52,24 @@ function projectionsBaseline(value: SessionProjectionBaseline): ProjectionsBasel
 /** Messages requested per history page. */
 export const PAGE_MESSAGES = 50
 
+/** Mobile tail pages start small; older pages keep the ordinary page size. */
+const MOBILE_INITIAL_MESSAGES = 3
+/** Browser breakpoint used by the web shell for the compact mobile posture. */
+const MOBILE_HISTORY_MEDIA = '(max-width: 767px)'
+
 /** Messages requested per page while a turn jump loops backwards (fewer, larger round trips). */
 export const JUMP_PAGE_MESSAGES = 200
+
+/**
+ * Sample the viewport only when opening a journal generation. The selected
+ * request is retained by RemoteJournalStream for reconnect/gap repair, while
+ * explicit older-page and turn-jump requests remain desktop-sized.
+ */
+function tailHistoryMessages(): number {
+  const mobile = typeof globalThis.matchMedia === 'function'
+    && globalThis.matchMedia(MOBILE_HISTORY_MEDIA).matches
+  return mobile ? MOBILE_INITIAL_MESSAGES : PAGE_MESSAGES
+}
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {
@@ -618,7 +634,7 @@ export class Session implements SessionFace {
     })
     this.events = events
     try {
-      await events.open({ maxMessages: PAGE_MESSAGES })
+      await events.open({ maxMessages: tailHistoryMessages() })
       if (generation !== this.openGeneration || this.events !== events) return
       this.openState = 'open'
     } catch (error) {

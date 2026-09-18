@@ -81,6 +81,17 @@
     - id: jobs
       name: '@deepseek-ai/dsh-jobs-local'
 
+    # Long-running root-agent turns receive bounded progress checks without
+    # cancelling or interrupting an active tool. All base-backed modes share
+    # this policy; a per-profile patch can tune or disable it later.
+    - id: long-task-monitor
+      name: '@deepseek-ai/dsh-long-task-monitor'
+      config:
+        startAfterMs: 900000
+        reportEveryMs: 600000
+        strategyReviewAfterMs: 3600000
+        rootOnly: true
+
     - id: llm-retry
       name: '@deepseek-ai/dsh-llm-retry'
 
