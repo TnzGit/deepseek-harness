@@ -83,6 +83,10 @@ pnpm dsh --profile headless "task"  # run one task from source (needs DEEPSEEK_A
 pnpm run demo:ptc -- "task"  # headless PTC mode run (needs key)
 ```
 
+## Repository exploration with Graft
+
+When the implementation location or cross-file relationship is unknown, prefer the Graft MCP tools `graft_find_code`, `graft_file_api`, `graft_trace_calls`, `graft_find_all`, and `graft_repo_map` before broad grep/read scans. Once Graft identifies the relevant files or symbols, use native read, grep, edit, write, and shell tools for precise inspection and modification. Do not call Graft when the target file or symbol is already known; keep native tools, compaction, and tool-result pruning as the authoritative execution path.
+
 ### Host sandbox failures
 
 If a required `gh`, `pnpm`, build, test, or generator command fails because the sandbox blocks credentials, network, IPC, watching, or nested `sandbox-exec`, retry unchanged with the narrowest host escalation. Require sandbox evidence; never bypass test failures or the product sandbox.
