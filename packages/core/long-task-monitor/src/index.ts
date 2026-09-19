@@ -11,6 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-settings'
 
 export const name = 'long-task-monitor'
 export const inject = ['agents']
@@ -22,8 +23,6 @@ export interface Config {
   startAfterMs?: number
   /** Progress-check interval after the first check (default 10 minutes). */
   reportEveryMs?: number
-  /** One strategy review is requested after this duration (default 1 hour). */
-  strategyReviewAfterMs?: number
   /** Restrict monitoring to root agents (default true, prevents subagent spam). */
   rootOnly?: boolean
 }
@@ -31,8 +30,25 @@ export interface Config {
 export const Config: z<Config> = z.object({
   startAfterMs: z.number().min(1).default(15 * 60 * 1000),
   reportEveryMs: z.number().min(1).default(10 * 60 * 1000),
-  strategyReviewAfterMs: z.number().min(1).default(60 * 60 * 1000),
   rootOnly: z.boolean().default(true),
+})
+
+/** User-owned settings for the live long-task progress monitor. */
+export const LONG_TASK_MONITOR_SETTINGS_NAMESPACE = 'long-task-monitor'
+
+export interface LongTaskMonitorSettings {
+  /** Whether progress steering is enabled. */
+  enabled: boolean
+  /** Continuous runtime before the first progress check, in minutes. */
+  startAfterMinutes: number
+  /** Interval between progress checks, in minutes. */
+  reportEveryMinutes: number
+}
+
+export const LONG_TASK_MONITOR_SETTINGS_SCHEMA: z<LongTaskMonitorSettings> = z.object({
+  enabled: z.boolean().default(true),
+  startAfterMinutes: z.number().step(1).min(1).default(15),
+  reportEveryMinutes: z.number().step(1).min(1).default(10),
 })
 
 function minutes(ms: number): string {
@@ -55,14 +71,13 @@ function notice(text: string) {
 class LongTaskRuntime {
   private startedAt: number | undefined
   private lastReportAt: number | undefined
-  private strategyReviewed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private stopped = false
 
   constructor(
     private readonly ctx: Context,
     private readonly agent: Agent,
-    private readonly config: Required<Config>,
+    private readonly config: () => LongTaskMonitorSettings,
   ) {}
 
   start(): () => void {
@@ -81,20 +96,36 @@ class LongTaskRuntime {
     if (this.stopped || this.startedAt !== undefined) return
     this.startedAt = Date.now()
     this.lastReportAt = undefined
-    this.strategyReviewed = false
-    this.schedule(this.config.startAfterMs)
+    this.schedule(this.config().startAfterMinutes * 60_000)
   }
 
   private reset(): void {
     this.clearTimer()
     this.startedAt = undefined
     this.lastReportAt = undefined
-    this.strategyReviewed = false
   }
 
   private stop(): void {
     this.stopped = true
     this.reset()
+  }
+
+  /** Apply a live settings change to an already-running monitor. */
+  refresh(): void {
+    if (this.stopped || this.startedAt === undefined || this.agent.status !== 'running') return
+    const config = this.config()
+    if (!config.enabled) {
+      this.clearTimer()
+      return
+    }
+    const now = Date.now()
+    const elapsed = now - this.startedAt
+    const startAfterMs = config.startAfterMinutes * 60_000
+    const reportEveryMs = config.reportEveryMinutes * 60_000
+    const next = this.lastReportAt === undefined
+      ? startAfterMs
+      : this.lastReportAt - this.startedAt + reportEveryMs
+    this.schedule(Math.max(1, next - elapsed))
   }
 
   private clearTimer(): void {
@@ -113,59 +144,67 @@ class LongTaskRuntime {
 
   private tick(): void {
     if (this.stopped || this.agent.status !== 'running' || this.startedAt === undefined) return
+    const config = this.config()
+    if (!config.enabled) {
+      this.clearTimer()
+      return
+    }
     const now = Date.now()
     const elapsed = now - this.startedAt
-    const shouldReport = elapsed >= this.config.startAfterMs
-      && (this.lastReportAt === undefined || now - this.lastReportAt >= this.config.reportEveryMs)
-    const shouldReview = !this.strategyReviewed && elapsed >= this.config.strategyReviewAfterMs
-    if (!shouldReport && !shouldReview) {
+    const startAfterMs = config.startAfterMinutes * 60_000
+    const reportEveryMs = config.reportEveryMinutes * 60_000
+    const shouldReport = elapsed >= startAfterMs
+      && (this.lastReportAt === undefined || now - this.lastReportAt >= reportEveryMs)
+    if (!shouldReport) {
       const nextReport = this.lastReportAt === undefined
-        ? this.config.startAfterMs
-        : this.lastReportAt - this.startedAt + this.config.reportEveryMs
-      const nextReview = shouldReview ? 0 : this.config.strategyReviewAfterMs
-      this.schedule(Math.max(1, Math.min(nextReport, nextReview) - elapsed))
+        ? startAfterMs
+        : this.lastReportAt - this.startedAt + reportEveryMs
+      this.schedule(Math.max(1, nextReport - elapsed))
       return
     }
 
-    const parts: string[] = []
-    if (shouldReport) {
-      parts.push(`【长任务进度检查】本轮任务已连续运行约 ${minutes(elapsed)}。请先用几句向用户汇报已完成、当前步骤、下一步或阻塞，然后继续执行，不要停下来等待用户。`)
-      this.lastReportAt = now
-    }
-    if (shouldReview) {
-      parts.push(`【长任务策略复盘】本轮任务已运行超过 1 小时。请在继续前简短评估是否存在更快或更稳、且能达到同样目的的方案；如果值得切换就切换，否则说明继续当前方案的原因。不要终止任务，也不要等待用户确认。`)
-      this.strategyReviewed = true
-    }
+    this.lastReportAt = now
     try {
-      this.agent.steer(notice(parts.join('\n\n')))
+      this.agent.steer(notice(`【长任务进度检查】本轮任务已连续运行约 ${minutes(elapsed)}。请先用几句向用户汇报已完成、当前步骤、下一步或阻塞，然后继续执行，不要停下来等待用户。`))
     } catch (error: unknown) {
       this.ctx.logger.warn(`long-task-monitor: could not queue progress check: ${String(error)}`)
     }
-    this.schedule(this.config.reportEveryMs)
+    this.schedule(reportEveryMs)
   }
 }
 
 export function apply(ctx: Context, config: Config): void {
-  const resolved: Required<Config> = {
-    startAfterMs: config.startAfterMs ?? 15 * 60 * 1000,
-    reportEveryMs: config.reportEveryMs ?? 10 * 60 * 1000,
-    strategyReviewAfterMs: config.strategyReviewAfterMs ?? 60 * 60 * 1000,
-    rootOnly: config.rootOnly ?? true,
+  const rootOnly = config.rootOnly ?? true
+  const composition: LongTaskMonitorSettings = {
+    enabled: true,
+    startAfterMinutes: Math.max(1, Math.round((config.startAfterMs ?? 15 * 60 * 1000) / 60_000)),
+    reportEveryMinutes: Math.max(1, Math.round((config.reportEveryMs ?? 10 * 60 * 1000) / 60_000)),
   }
+  let source: () => LongTaskMonitorSettings = () => composition
   const runtimes = new Map<Agent, () => void>()
+  const runtimeObjects = new Map<Agent, LongTaskRuntime>()
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, LONG_TASK_MONITOR_SETTINGS_NAMESPACE, LONG_TASK_MONITOR_SETTINGS_SCHEMA, composition, {
+      setSource: (current) => { source = current },
+      onChange: () => { for (const runtime of runtimeObjects.values()) runtime.refresh() },
+    })
+  })
   const stopCreated = ctx.on('agent/created', ({ agent }) => {
-    if (resolved.rootOnly && !ctx.agents.roots().includes(agent)) return
+    if (rootOnly && !ctx.agents.roots().includes(agent)) return
     if (runtimes.has(agent)) return
-    const runtime = new LongTaskRuntime(ctx, agent, resolved)
+    const runtime = new LongTaskRuntime(ctx, agent, source)
     const cleanup = agent.ctx.effect(() => runtime.start(), 'long-task-monitor.runtime()')
     runtimes.set(agent, () => {
       cleanup()
+      runtimeObjects.delete(agent)
       runtimes.delete(agent)
     })
+    runtimeObjects.set(agent, runtime)
   })
   ctx.effect(() => () => {
     stopCreated()
     for (const cleanup of runtimes.values()) cleanup()
     runtimes.clear()
+    runtimeObjects.clear()
   }, 'long-task-monitor.lifecycle()')
 }

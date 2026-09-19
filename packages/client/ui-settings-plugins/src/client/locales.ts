@@ -17,6 +17,9 @@ export type PluginsSettingsLocaleKey =
   | 'subagentModelSelectionPartial' | 'subagentModelSelectionUnavailable'
   | 'subagentModelSelectionUnavailableGroup' | 'subagentModelSelectionEmpty'
   | 'subagentModelSelectionRequired' | 'subagentModelSelectionConflict' | 'subagentModelSelectionOff'
+  | 'longTaskMonitorTitle' | 'longTaskMonitorDescription' | 'longTaskMonitorEnabled'
+  | 'longTaskMonitorStartAfter' | 'longTaskMonitorStartAfterHint'
+  | 'longTaskMonitorReportEvery' | 'longTaskMonitorReportEveryHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -72,6 +75,13 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   subagentModelSelectionRequired: 'Select at least one model before saving.',
   subagentModelSelectionConflict: 'Settings changed elsewhere. Discard your draft and try again.',
   subagentModelSelectionOff: 'Subagents use configured defaults or inherit the parent agent\'s model. Saved model choices are retained.',
+  longTaskMonitorTitle: 'Long-task monitor',
+  longTaskMonitorDescription: 'Periodically asks long-running tasks to report progress.',
+  longTaskMonitorEnabled: 'Enable progress checks',
+  longTaskMonitorStartAfter: 'First check after (minutes)',
+  longTaskMonitorStartAfterHint: 'The monitor stays quiet before this continuous runtime.',
+  longTaskMonitorReportEvery: 'Report interval (minutes)',
+  longTaskMonitorReportEveryHint: 'How often a running task is asked for a short progress update.',
 }
 
 /** Simplified Chinese copy. */
@@ -128,4 +138,11 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   subagentModelSelectionRequired: '保存前请至少选择一个模型。',
   subagentModelSelectionConflict: '设置已在其他位置更新。请放弃修改后重试。',
   subagentModelSelectionOff: '关闭后，Subagent 使用配置的默认模型或继承父 Agent 的模型；已选模型会保留。',
+  longTaskMonitorTitle: '长任务监控',
+  longTaskMonitorDescription: '定期要求长时间运行的任务汇报进度。',
+  longTaskMonitorEnabled: '启用进度检查',
+  longTaskMonitorStartAfter: '首次检查等待（分钟）',
+  longTaskMonitorStartAfterHint: '任务连续运行达到此时长前不发送进度提醒。',
+  longTaskMonitorReportEvery: '汇报间隔（分钟）',
+  longTaskMonitorReportEveryHint: '运行中的任务每隔多久收到一次简短进度汇报提醒。',
 }

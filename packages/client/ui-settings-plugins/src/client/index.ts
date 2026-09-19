@@ -26,6 +26,7 @@ import { ConfigurablePluginsTab } from './ConfigurablePluginsTab.tsx'
 import { PluginsSettingsSection } from './PluginsSettingsSection.tsx'
 import type { PluginsSettingsSectionInjected, PluginsSettingsTabEntry } from './PluginsSettingsSection.tsx'
 import { SubagentModelSelectionCard } from './SubagentModelSelectionCard.tsx'
+import { LongTaskMonitorCard } from './LongTaskMonitorCard.tsx'
 import { WebSearchCard } from './WebSearchCard.tsx'
 import { AGENT_LOOP_NS, AgentLoopCardController } from './agent-loop-card-controller.ts'
 import { SHELL_NS, BashCardController } from './bash-card-controller.ts'
@@ -33,6 +34,7 @@ import { ConfigurablePluginsTabController } from './tab-store.ts'
 import {
   SUBAGENT_MODEL_SELECTION_NS, SubagentModelSelectionCardController,
 } from './subagent-model-selection-card-controller.ts'
+import { LONG_TASK_MONITOR_NS, LongTaskMonitorCardController } from './long-task-monitor-card-controller.ts'
 import { WEB_SEARCH_NS, WebSearchCardController } from './web-search-card-controller.ts'
 import { en, zh } from './locales.ts'
 
@@ -48,6 +50,7 @@ export type {
 export type { AgentLoopCardFace, AgentLoopCardState } from './agent-loop-card-controller.ts'
 export type { BashCardFace, BashCardState } from './bash-card-controller.ts'
 export type { WebSearchCardFace, WebSearchCardState } from './web-search-card-controller.ts'
+export type { LongTaskMonitorCardFace, LongTaskMonitorCardState } from './long-task-monitor-card-controller.ts'
 
 /** Dictionary namespace owned by this plugin. */
 const NS = 'settings.plugins'
@@ -72,6 +75,9 @@ export function apply(ctx: ClientContext): void {
   const subagentModelSelection = new SubagentModelSelectionCardController(
     ctx.settingsScope.bind({ namespace: SUBAGENT_MODEL_SELECTION_NS }),
     ctx,
+  )
+  const longTaskMonitor = new LongTaskMonitorCardController(
+    ctx.settingsScope.bind({ namespace: LONG_TASK_MONITOR_NS }),
   )
 
   // The credential a card reports is not part of any settings section, so its
@@ -189,5 +195,11 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
       inject: () => webSearch.inject(),
     }, WebSearchCard)
+    yield ctx.slots.register({
+      name: 'settings.plugin.item',
+      key: LONG_TASK_MONITOR_NS,
+      locale: NS,
+      inject: () => longTaskMonitor.inject(),
+    }, LongTaskMonitorCard)
   })
 }

@@ -128,6 +128,19 @@ export function numberField(field: string): CardFieldSpec {
   }
 }
 
+/** A staged boolean field rendered by a switch or checkbox. */
+export function booleanField(field: string): CardFieldSpec {
+  return {
+    field,
+    format: value => typeof value === 'boolean' ? String(value) : '',
+    parse: (text) => {
+      if (text === 'true') return { kind: 'set', value: true }
+      if (text === 'false') return { kind: 'set', value: false }
+      return undefined
+    },
+  }
+}
+
 /**
  * A free-text field. An empty draft clears the field, so emptying the control
  * and saving is the same gesture as resetting it.

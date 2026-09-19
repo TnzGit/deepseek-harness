@@ -89,7 +89,6 @@
       config:
         startAfterMs: 900000
         reportEveryMs: 600000
-        strategyReviewAfterMs: 3600000
         rootOnly: true
 
     - id: llm-retry

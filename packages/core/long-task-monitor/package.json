@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-long-task-monitor",
-  "description": "Periodic progress and strategy-review steering for long-running root-agent tasks",
+  "description": "Periodic progress steering for long-running root-agent tasks",
   "version": "0.1.5-rc.1",
   "publishConfig": { "access": "public" },
   "type": "module",
@@ -18,7 +18,8 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-llm": "workspace:^"
+    "@deepseek-ai/dsh-llm": "workspace:^",
+    "@deepseek-ai/dsh-settings": "workspace:^"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "workspace:^"
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-llm": "workspace:^"
+    "@deepseek-ai/dsh-llm": "workspace:^",
+    "@deepseek-ai/dsh-settings": "workspace:^"
   }
 }
