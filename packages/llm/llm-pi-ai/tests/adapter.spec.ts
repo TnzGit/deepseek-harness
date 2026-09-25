@@ -73,6 +73,67 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
+  it('adapts the output cap once when a context-window rejection names the numbers', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.'
+      + ' Please reduce the length of the input prompt or the number of requested output tokens.'
+      + ' (parameter=input_tokens, value=95233)' } })
+    const server = await mockServer([
+      { status: 400, body: overflow },
+      { events: textEvents },
+    ])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(2)
+    const capOf = (request: unknown): number | undefined => {
+      const body = request as { max_tokens?: number; max_completion_tokens?: number }
+      return body.max_tokens ?? body.max_completion_tokens
+    }
+    expect(capOf(server.requests[0])).toBe(32_768)
+    expect(capOf(server.requests[1])).toBe(32_255)
+    expect(chunks.filter(chunk =>
+      typeof chunk === 'object' && chunk !== null
+      && (chunk as { type?: string }).type === 'usage')).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('surfaces an overflow without retry when the remaining window is too small', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 126000 input tokens, for a total of at least 158768 tokens.' } })
+    const server = await mockServer([{ status: 400, body: overflow }])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE } },
+    })
+  })
+
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url)
