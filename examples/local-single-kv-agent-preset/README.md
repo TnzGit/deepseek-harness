@@ -24,7 +24,7 @@ Continuable Subagent live limit:    1
 One-shot concurrent run limit:      1
 ```
 
-The preset itself makes the ordinary `subagent` tool use `spawn` in foreground `one-shot` mode, removes `run_in_background`, inherits the Host recursion-depth policy, and disables `subagent_fork` by default. Workflow calls still share the Host's `maxConcurrentRuns` FIFO gate, so a workflow cannot bypass the single-run limit.
+The preset itself makes the ordinary `subagent` tool use `spawn` in foreground `one-shot` mode, removes its `run_in_background` option, inherits the Host recursion-depth policy, disables `subagent_fork` by default, and omits the continuable `send_message`/`list_agents` controls. It also disables background workflow runs. Workflow children still share the Host's `maxConcurrentRuns` FIFO gate, so orchestration cannot bypass the single-run limit.
 
 This intentionally produces phase-oriented delegation:
 
@@ -32,4 +32,4 @@ This intentionally produces phase-oriented delegation:
 Main -> one fresh spawn child -> result -> Main
 ```
 
-rather than overlapping the main Agent with background children. `agentOptions.maxTokens` is not a substitute for these limits: it caps completion output, not prompt/context KV usage.
+rather than overlapping the main Agent with background children. Ordinary shell/background jobs remain available because they do not consume model KV, but delegation and workflow paths that can start child LLM work are foreground-only. `agentOptions.maxTokens` is not a substitute for these limits: it caps completion output, not prompt/context KV usage.
