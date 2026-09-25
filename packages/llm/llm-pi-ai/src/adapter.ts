@@ -41,6 +41,7 @@ import {
   adaptMaxTokensForContextOverflow,
   attributionHeaders,
   contentHasImage,
+  CONTEXT_ADAPT_MAX_ATTEMPTS,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   LlmAdapter,
   LlmError,
@@ -361,13 +362,12 @@ export class PiAiAdapter extends LlmAdapter {
       this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
     }
 
-    // A provider can reject an otherwise valid prompt only because its output
-    // reservation crowds the context window. When that rejection names the
-    // exact window and input sizes, retry once with a smaller cap instead of
-    // forcing history compaction. A second overflow follows the normal error
-    // path unchanged.
+    // Provider recounts can shift across equivalent requests, so each bounded
+    // adaptation consumes the latest exact rejection and reduces the cap again.
+    // Lower-bound vLLM sentinels deliberately bypass adaptation and flow into
+    // the normal compaction recovery path.
     let effectiveMaxTokens = options.maxTokens
-    let adaptedOnce = false
+    let adaptationAttempts = 0
 
     attempt: while (true) {
       const consumer = new AbortController()
@@ -428,7 +428,7 @@ export class PiAiAdapter extends LlmAdapter {
             continue
           }
 
-          if (!adaptedOnce && !yieldedContent
+          if (adaptationAttempts < CONTEXT_ADAPT_MAX_ATTEMPTS && !yieldedContent
             && chunk.type === 'finish'
             && chunk.reason.kind === 'error'
             && chunk.reason.failure.code === CONTEXT_WINDOW_EXCEEDED_CODE) {
@@ -437,7 +437,7 @@ export class PiAiAdapter extends LlmAdapter {
               effectiveMaxTokens,
             )
             if (adapted !== undefined) {
-              adaptedOnce = true
+              adaptationAttempts += 1
               effectiveMaxTokens = adapted
               pendingUsage = undefined
               continue attempt
