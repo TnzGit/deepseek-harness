@@ -31,8 +31,9 @@ import {
   assertNoActiveCompaction,
   compactSurfaceRegion,
   selectCompactableRange,
+  shrinkCompactableRange,
 } from './region.ts'
-import { summarizeWithLlm } from './summarizer.ts'
+import { DEGENERATE_SUMMARY_CODE, summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
@@ -115,6 +116,33 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+
+/** Maximum strict range halvings after a summary reaches its output cap or degenerates. */
+const SUMMARY_RANGE_RETRIES = 3
+
+/** Whether an error chain represents the summarizer's fail-closed token cap. */
+function isSummaryTokenCap(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === 'MAX_TOKENS') return true
+    current = current.cause
+  }
+  return false
+}
+
+/** Whether a summary attempt completed without a usable visible checkpoint. */
+function isDegenerateSummary(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === DEGENERATE_SUMMARY_CODE) return true
+    current = current.cause
+  }
+  return false
+}
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -426,15 +454,57 @@ export class BasicCompactionEngine extends CompactionEngine {
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<CompactionResult> {
-    return compactSurfaceRegion(
-      this.regionDependencies(),
-      agent.session,
-      start,
-      end,
+    return this.compactRangeWithFallback(
+      { start, end },
       agent,
-      { owner: 'current-turn', stability: 'whole-surface' },
-      signal,
+      range => compactSurfaceRegion(
+        this.regionDependencies(),
+        agent.session,
+        range.start,
+        range.end,
+        agent,
+        { owner: 'current-turn', stability: 'whole-surface' },
+        signal,
+      ),
     )
+  }
+
+  /** Retry a truncated or degenerate summary over progressively smaller balanced prefixes. */
+  private async compactRangeWithFallback(
+    initial: { readonly start: SessionSeq; readonly end: SessionSeq },
+    agent: Agent,
+    run: (range: { readonly start: SessionSeq; readonly end: SessionSeq }) => Promise<CompactionResult>,
+  ): Promise<CompactionResult> {
+    let range = initial
+    const target = conversationTarget(agent)
+    const summaryCap = target === undefined
+      ? this.config.maxTokens
+      : resolveTargetPolicy(this.config, target).maxTokens
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.ctx.logger.info(
+          `compaction summary attempt ${attempt + 1}/${SUMMARY_RANGE_RETRIES + 1}: `
+          + `seqs ${range.start}-${range.end}, maxTokens=${summaryCap}, reasoning=off`,
+        )
+        return await run(range)
+      } catch (error: unknown) {
+        const tokenCap = isSummaryTokenCap(error)
+        const degenerate = isDegenerateSummary(error)
+        if ((!tokenCap && !degenerate) || attempt >= SUMMARY_RANGE_RETRIES) throw error
+        const smaller = shrinkCompactableRange(
+          agent.session,
+          this.ctx.tokenMeter.measure(agent.session),
+          range,
+        )
+        if (smaller === null) throw error
+        this.ctx.logger.warn(
+          `compaction summary ${tokenCap ? 'reached its token cap' : 'produced no usable checkpoint'}; `
+          + 'retrying a smaller balanced range '
+          + `(seqs ${range.start}-${range.end} -> ${smaller.start}-${smaller.end})`,
+        )
+        range = smaller
+      }
+    }
   }
 
   /**
@@ -462,21 +532,25 @@ export class BasicCompactionEngine extends CompactionEngine {
             0,
           )
           if (range === null) return null
-          return await compactSurfaceRegion(
-            this.regionDependencies(),
-            agent.session,
-            range.start,
-            range.end,
+          return await this.compactRangeWithFallback(
+            range,
             agent,
-            {
-              owner: null,
-              stability: 'selected-span',
-              ...sourceCommandId === undefined ? {} : { sourceCommandId },
-              flush: async () => {
-                await this.ctx.sessions.flush(agent.session)
+            candidate => compactSurfaceRegion(
+              this.regionDependencies(),
+              agent.session,
+              candidate.start,
+              candidate.end,
+              agent,
+              {
+                owner: null,
+                stability: 'selected-span',
+                ...sourceCommandId === undefined ? {} : { sourceCommandId },
+                flush: async () => {
+                  await this.ctx.sessions.flush(agent.session)
+                },
               },
-            },
-            operationSignal,
+              operationSignal,
+            ),
           )
         } catch (error: unknown) {
           if (agentSignal.aborted && operationSignal.reason === agentSignal.reason) {
