@@ -344,6 +344,48 @@ describe('provider-routed retry policy', () => {
     })
   })
 
+  it('uses a TIMEOUT-specific 15s, 30s, 60s budget without changing route backoff', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter([
+      new LlmError('timeout one', 'TIMEOUT'),
+      new LlmError('timeout two', 'TIMEOUT'),
+      new LlmError('timeout three', 'TIMEOUT'),
+      new LlmError('timeout four', 'TIMEOUT'),
+    ])
+    ;({ ctx: context } = await harness(adapter, {
+      mock: normalConfig({
+        maxRetries: 5,
+        backoff: { initialDelayMs: 8_550, maxDelayMs: 8_550, jitterRatio: 0 },
+        failureOverrides: {
+          TIMEOUT: {
+            maxRetries: 3,
+            backoff: { initialDelayMs: 15_000, maxDelayMs: 60_000, jitterRatio: 0 },
+          },
+        },
+      }),
+    }))
+    const agent = await context.agentLoop.create(SessionId('retry-timeout-override'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await vi.runAllTimersAsync()
+    await idle
+
+    expect(adapter.requests).toHaveLength(4)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry').map(event => ({
+      retry: event.data.retry,
+      maxRetries: event.data.mode === 'normal' ? event.data.maxRetries : undefined,
+      delayMs: event.data.delayMs,
+    }))).toEqual([
+      { retry: 1, maxRetries: 3, delayMs: 15_000 },
+      { retry: 2, maxRetries: 3, delayMs: 30_000 },
+      { retry: 3, maxRetries: 3, delayMs: 60_000 },
+    ])
+  })
+
   it('accepts the zero-delay lower jitter bound', async () => {
     vi.useFakeTimers()
     const adapter = new ScriptedAdapter([

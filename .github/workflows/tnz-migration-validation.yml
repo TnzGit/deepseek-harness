@@ -33,6 +33,12 @@ jobs:
           packages/llm/llm-pi-ai/tests/adapter.spec.ts
           packages/llm/llm-deepseek/tests/stream.spec.ts
           packages/util/timeout/tests/timeout.spec.ts
+          packages/llm/llm/src/retry-policy.ts
+          packages/llm/llm/tests/retry-policy.spec.ts
+          packages/llm/llm-retry/src/index.ts
+          packages/llm/llm-retry/tests/retry.spec.ts
+          packages/llm/llm/tests/retry-policy.spec.ts
+          packages/llm/llm-retry/tests/retry.spec.ts
       - name: Lint changed LLM and timeout files
         run: >-
           pnpm exec oxlint
