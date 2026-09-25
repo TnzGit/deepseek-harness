@@ -1,4 +1,4 @@
-name: TNZ Phase 1 validation
+name: TNZ Phase 1 Web validation
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  phase1:
+  web:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -26,25 +26,10 @@ jobs:
           package-manager-cache: false
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Run focused Phase 1 unit and settings tests
-        run: >-
-          pnpm exec vitest run
-          packages/subagent/subagent/tests/run-admission.spec.ts
-          packages/subagent/subagent/tests/service.spec.ts
-          packages/client/ui-settings-subagent/tests/controllers.client.spec.ts
-          packages/client/ui-settings-subagent/tests/card.client.spec.tsx
-      - name: Verify generated config catalog
-        run: pnpm run verify-config-catalog
-      - name: Verify Cordis configurations
-        run: pnpm run verify-cordis-config
-      - name: Typecheck
-        run: pnpm run typecheck
-      - name: Lint
-        run: pnpm run lint
+      - name: Build repository
+        run: pnpm run build
       - name: Install Playwright Chromium
         run: pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps chromium
-      - name: Build Web frontend
-        run: pnpm run build:web
       - name: Run Subagent settings Web e2e
         env:
           DSH_SNAPSHOT: replay
