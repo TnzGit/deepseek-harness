@@ -26,7 +26,15 @@ jobs:
           package-manager-cache: false
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Run pi-ai regression tests
-        run: pnpm exec vitest run packages/llm/llm-pi-ai/tests/convert.spec.ts
-      - name: Lint changed pi-ai files
-        run: pnpm exec oxlint packages/llm/llm-pi-ai/src/stream.ts packages/llm/llm-pi-ai/tests/convert.spec.ts
+      - name: Run local-inference LLM regressions
+        run: >-
+          pnpm exec vitest run
+          packages/llm/llm-pi-ai/tests/convert.spec.ts
+          packages/llm/llm-deepseek/tests/stream.spec.ts
+      - name: Lint changed LLM files
+        run: >-
+          pnpm exec oxlint
+          packages/llm/llm-pi-ai/src/stream.ts
+          packages/llm/llm-pi-ai/tests/convert.spec.ts
+          packages/llm/llm-deepseek/src/translate.ts
+          packages/llm/llm-deepseek/tests/stream.spec.ts
