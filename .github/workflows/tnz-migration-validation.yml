@@ -11,7 +11,7 @@ permissions:
 jobs:
   focused:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       DSH_TELEMETRY_DISABLED: '1'
     steps:
@@ -30,11 +30,19 @@ jobs:
         run: >-
           pnpm exec vitest run
           packages/llm/llm-pi-ai/tests/convert.spec.ts
+          packages/llm/llm-pi-ai/tests/adapter.spec.ts
           packages/llm/llm-deepseek/tests/stream.spec.ts
-      - name: Lint changed LLM files
+          packages/util/timeout/tests/timeout.spec.ts
+      - name: Lint changed LLM and timeout files
         run: >-
           pnpm exec oxlint
           packages/llm/llm-pi-ai/src/stream.ts
+          packages/llm/llm-pi-ai/src/adapter.ts
+          packages/llm/llm-pi-ai/src/config.ts
           packages/llm/llm-pi-ai/tests/convert.spec.ts
+          packages/llm/llm-pi-ai/tests/adapter.spec.ts
+          packages/llm/llm-pi-ai/tests/mock-server.ts
           packages/llm/llm-deepseek/src/translate.ts
           packages/llm/llm-deepseek/tests/stream.spec.ts
+          packages/util/timeout/src/index.ts
+          packages/util/timeout/tests/timeout.spec.ts
