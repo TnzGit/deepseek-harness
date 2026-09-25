@@ -86,7 +86,6 @@
         modelSelectionSettings: true
         backgroundMode: one-shot
         enableRunInBackground: false
-        maxDepth: 1
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
       disabled: true
@@ -95,7 +94,6 @@
         toolName: subagent_fork
         backgroundMode: one-shot
         enableRunInBackground: false
-        maxDepth: 1
     - id: tool-subagent-codex
       name: '@deepseek-ai/dsh-tool-subagent'
       disabled: true
