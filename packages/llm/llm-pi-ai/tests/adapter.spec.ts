@@ -413,6 +413,40 @@ describe('PiAiAdapter provider routing', () => {
     })
   })
 
+  it('allows a longer first-chunk wait while retaining a shorter stream idle timeout', async () => {
+    const server = await mockServer([{ events: textEvents, initialDelayMs: 60 }])
+    const ctx = await harness(server.url, {
+      streamFirstChunkTimeoutMs: 200,
+      streamIdleTimeoutMs: 20,
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('times out the first chunk independently and closes the SDK request', async () => {
+    const server = await mockServer([{ events: textEvents, initialDelayMs: 200 }])
+    const ctx = await harness(server.url, {
+      streamFirstChunkTimeoutMs: 20,
+      streamIdleTimeoutMs: 200,
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(result.finish).toMatchObject({
+      kind: 'error',
+      failure: { code: 'TIMEOUT', message: 'pi-ai first chunk timeout after 20ms' },
+    })
+    await Promise.race([
+      server.responseClosed,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => { reject(new Error('SDK request did not close after first chunk timeout')) }, 1_000)
+      }),
+    ])
+    expect(server.closedResponses).toBe(1)
+  })
+
   it('stops the SDK request when the adapter idle watchdog expires', async () => {
     const server = await mockServer([{ events: textEvents, delayMs: 200 }])
     const ctx = await harness(server.url, { streamIdleTimeoutMs: 20 })
@@ -865,6 +899,9 @@ describe('provider profile lifecycle', () => {
       { streamIdleTimeoutMs: 0 },
       { streamIdleTimeoutMs: Number.NaN },
       { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
+      { streamFirstChunkTimeoutMs: 0 },
+      { streamFirstChunkTimeoutMs: Number.NaN },
+      { streamFirstChunkTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
       { maxRequestImageBytes: 0 },
       { maxRequestImageBytes: 1.5 },
       { maxRequestImageBytes: Number.NaN },
@@ -943,6 +980,18 @@ describe('provider profile lifecycle', () => {
     expect(() => resolveProfiles({
       openai: { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
     })).toThrow(/streamIdleTimeoutMs.*no greater/)
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 12_000,
+    })
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000, streamFirstChunkTimeoutMs: 900_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 900_000,
+    })
   })
 })
 
