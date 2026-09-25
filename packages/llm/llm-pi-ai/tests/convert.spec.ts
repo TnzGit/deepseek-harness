@@ -911,6 +911,14 @@ describe('mapStopReason / mapUsage', () => {
   })
 
   it.each([
+    'EngineCore encountered an issue. See stack trace (above) for the root cause.',
+    'vllm.v1.engine.exceptions.EngineDeadError: EngineCore encountered an issue. See stack trace (above) for the root cause.',
+  ])('maps vLLM EngineDead wording %j to a retryable server failure', (errorMessage) => {
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage })))
+      .toEqual({ kind: 'error', failure: { message: errorMessage, code: 'SERVER' } })
+  })
+
+  it.each([
     'other side closed',
     'HTTP2 request did not get a response',
     'WebSocket closed unexpectedly',

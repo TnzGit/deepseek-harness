@@ -43,6 +43,12 @@ function classifyPiAiError(message: string): string {
   if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
   if (/\b429\b|rate.?limit/i.test(message)) return 'RATE_LIMIT'
+  // vLLM raises EngineDeadError after its EngineCore fatally exits. pi-ai can
+  // flatten that provider failure to stable text and lose the HTTP 5xx status
+  // that would otherwise classify it as SERVER. Preserve the server-failure
+  // semantics so the existing bounded retry policy can bridge an external
+  // engine restart instead of treating the dead engine as PI_AI_ERROR.
+  if (/\bEngineCore encountered an issue\b|\bEngineDeadError\b/i.test(message)) return 'SERVER'
   // A rejected request body (gateway or provider size cap): resending the
   // same request cannot succeed, so it is invalid, not transient.
   if (/\b413\b|failed to buffer the request body:\s*length limit exceeded|payload too large|request body too large/i.test(message)) return 'INVALID_REQUEST'
