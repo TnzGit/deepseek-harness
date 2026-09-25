@@ -581,17 +581,21 @@ export class SubagentRuntime extends TypertRemoteService {
     // capacity is full, queueing that nested start can deadlock the whole tree.
     // Root callers still queue FIFO; nested callers must have immediate room.
     const nested = request.parent.session.header.origin === 'subagent'
-    const releaseRun = nested
-      ? this.oneShotAdmission.tryAcquire(request.signal)
-        ?? (() => {
-          const capacity = this.config.maxConcurrentRuns.get()
-          throw new SubagentError(
-            `one-shot subagent execution limit reached (concurrent run limit: ${capacity}); `
-            + 'nested subagent starts do not wait for capacity because the parent may hold a run slot while awaiting its child',
-            'EXECUTION_LIMIT_REACHED',
-          )
-        })()
-      : await this.oneShotAdmission.acquire(request.signal)
+    let releaseRun: () => void
+    if (nested) {
+      const immediate = this.oneShotAdmission.tryAcquire(request.signal)
+      if (immediate === undefined) {
+        const capacity = this.config.maxConcurrentRuns.get()
+        throw new SubagentError(
+          `one-shot subagent execution limit reached (concurrent run limit: ${capacity}); `
+          + 'nested subagent starts do not wait for capacity because the parent may hold a run slot while awaiting its child',
+          'EXECUTION_LIMIT_REACHED',
+        )
+      }
+      releaseRun = immediate
+    } else {
+      releaseRun = await this.oneShotAdmission.acquire(request.signal)
+    }
     let run: SubagentRun
     try {
       run = await provider.start(resolved)
