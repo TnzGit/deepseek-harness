@@ -79,6 +79,7 @@ import { subagentIdentityProjectionDefinition, subagentTimingProjectionDefinitio
 import { establishCatalogChild, subagentCatalogProjectionDefinition } from './catalog.ts'
 import type { SubagentCatalogEntry } from './projection-types.ts'
 import { deliverSubagentPrompt } from './internal.ts'
+import { OneShotRunAdmission } from './run-admission.ts'
 
 export type {} from './catalog.ts'
 export * from './out-of-process.ts'
@@ -192,6 +193,8 @@ interface BrowserPromptSource {
 export interface Config {
   /** Maximum live children sharing uninterrupted continuable parent links; defaults to 8. */
   maxActiveSubagents: Volatile<number>
+  /** Maximum concurrently executing one-shot runs across providers; defaults to 8. */
+  maxConcurrentRuns: Volatile<number>
   /** Default delegation depth for tools without an explicit limit; defaults to 1. */
   maxDepth: Volatile<number>
 }
@@ -201,9 +204,11 @@ export class SubagentRuntime extends TypertRemoteService {
   static Config = z.object({
     maxDepth: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(1).volatile(),
     maxActiveSubagents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8).volatile(),
+    maxConcurrentRuns: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8).volatile(),
   })
   private providers = new Map<string, SubagentProvider>()
   private continuations: SubagentContinuationManager | undefined
+  private readonly oneShotAdmission: OneShotRunAdmission
   /**
    * The contained lifecycle-edge publisher. Built here because scoped dispatch
    * keys its carrier by this exact service instance, whose own context filter
@@ -213,6 +218,8 @@ export class SubagentRuntime extends TypertRemoteService {
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'subagents')
+    this.oneShotAdmission = new OneShotRunAdmission(() => this.config.maxConcurrentRuns.get())
+    ctx.on('loader/volatile-update', () => { this.oneShotAdmission.refresh() })
     this.emitLifecycle = createLifecycleEmitter(this.ctx, parent => scopeTarget(this, parent))
     ctx.inject(['agents'], (childCtx: Context) => {
       const manager = new SubagentContinuationManager(childCtx, {
@@ -567,7 +574,17 @@ export class SubagentRuntime extends TypertRemoteService {
       ...request.label !== undefined ? { label: request.label } : {},
     })
     const resolved: ResolvedSubagentStartRequest = { ...request, descriptor }
-    const run = await provider.start(resolved)
+    const releaseRun = await this.oneShotAdmission.acquire(request.signal)
+    let run: SubagentRun
+    try {
+      run = await provider.start(resolved)
+    } catch (error: unknown) {
+      releaseRun()
+      throw error
+    }
+    // Capacity follows actual execution, not provider startup. Attach both
+    // settlement arms without creating a rejection-carrying cleanup promise.
+    void run.result.then(releaseRun, releaseRun)
     const child = run.localAgent?.session
     if (child !== undefined) {
       try {
@@ -581,6 +598,9 @@ export class SubagentRuntime extends TypertRemoteService {
           this.ctx.logger.warn(
             `subagent: disposal after catalog append failure also failed: ${String(cleanupError)}`,
           )
+        } finally {
+          // A broken provider must not strand global capacity on an unpublished run.
+          releaseRun()
         }
         throw error
       }
