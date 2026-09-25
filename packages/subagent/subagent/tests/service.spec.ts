@@ -96,6 +96,10 @@ class GatedProvider implements SubagentProvider {
       stopReason: 'completed',
     })
   }
+
+  fail(index: number, message = 'run failed'): void {
+    this.gates[index]!.reject(new Error(message))
+  }
 }
 
 async function service(): Promise<{ ctx: Context; subagents: SubagentRuntime }> {
@@ -125,7 +129,6 @@ describe('SubagentRuntime', () => {
 
     expect(ctx.sessionProjections.stateOf(parent, 'subagentCatalog')).toBeUndefined()
   })
-
 
   it('serializes one-shot starts in FIFO order and releases capacity on result settlement', async () => {
     const ctx = new Context()
@@ -194,6 +197,59 @@ describe('SubagentRuntime', () => {
     expect(attempts).toBe(2)
     gated.settle(0)
     await second.result
+    await ctx.fiber.dispose()
+  })
+
+  it('releases one-shot capacity when the published run result rejects', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const secondPending = ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first'])
+
+    provider.fail(0, 'infrastructure failure')
+    await expect(first.result).rejects.toThrow('infrastructure failure')
+    const second = await secondPending
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(1)
+    await second.result
+    await ctx.fiber.dispose()
+  })
+
+  it('honors a lower live capacity without cancelling accepted runs', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    const config = await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 2 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const second = await ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    await config.update({ maxConcurrentRuns: 1 })
+    const thirdPending = ctx.subagents.start('gated', baseRequest({ label: 'third' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(0)
+    await first.result
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(1)
+    await second.result
+    const third = await thirdPending
+    expect(provider.starts).toEqual(['first', 'second', 'third'])
+
+    provider.settle(2)
+    await third.result
     await ctx.fiber.dispose()
   })
 
