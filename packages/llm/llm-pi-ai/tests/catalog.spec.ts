@@ -711,6 +711,47 @@ describe('per-model reasoning efforts', () => {
     expect(model.thinkingLevelMap).toEqual(catalogModel.thinkingLevelMap)
   })
 
+  it('uses a route default only for models the installed catalog does not describe', () => {
+    const defaultReasoningEfforts = { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' }
+    const handDeclared = modelOf({
+      'acme-gateway': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        defaultReasoningEfforts,
+        models: [{ id: 'rolling-model-id' }],
+      },
+    })
+    expect(getSupportedThinkingLevels(handDeclared)).toEqual(['off', 'low', 'medium', 'xhigh'])
+
+    const [catalogModel] = getBuiltinModels('deepseek')
+    if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const known = modelOf({
+      deepseek: {
+        defaultReasoningEfforts,
+        models: [{ id: catalogModel.id }],
+      },
+    }, 'deepseek')
+    expect(getSupportedThinkingLevels(known)).toEqual(getSupportedThinkingLevels(catalogModel as Model<Api>))
+  })
+
+  it('lets a model override or disable the route reasoning default', () => {
+    const providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
+      'acme-gateway': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        defaultReasoningEfforts: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
+        models: [
+          { id: 'narrow', reasoningEfforts: { off: null, low: 'brief' } },
+          { id: 'plain', reasoningEfforts: false },
+        ],
+      },
+    }
+    const models = resolveProfiles(providers).get('acme-gateway')?.piProvider?.getModels() ?? []
+    expect(getSupportedThinkingLevels(models[0] as Model<Api>)).toEqual(['off', 'low'])
+    expect((models[0] as Model<Api>).thinkingLevelMap?.low).toBe('brief')
+    expect((models[1] as Model<Api>).reasoning).toBe(false)
+  })
+
   it('rejects a declaration that offers nothing or spells a level it cannot send', () => {
     const declare = (efforts: NonNullable<LlmPiAi.PiAiModelProfile['reasoningEfforts']>): (() => unknown) =>
       () => resolveProfiles(declared([{ id: 'm', reasoningEfforts: efforts }]))
