@@ -553,9 +553,11 @@ export class SubagentRuntime extends TypertRemoteService {
 
   /**
    * Establish a published child on the named provider. Capability and semantic
-   * checks run before delegation. Provider ownership lasts until its promise
-   * fulfills; a rejection therefore has no run for the caller to dispose and
-   * emits no run lifecycle events. Post-publication turn and infrastructure
+   * checks run before delegation. One-shot execution admission may then wait
+   * in FIFO order; caller cancellation while queued rejects before the provider
+   * sees the request. Provider ownership lasts until its promise fulfills; a
+   * rejection therefore has no run for the caller to dispose and emits no run
+   * lifecycle events. Post-publication turn and infrastructure
    * failures settle through the returned run.
    * A catalog append failure disposes the run and handles its result rejection;
    * the caller receives the catalog error even if disposal also fails.
