@@ -33,6 +33,13 @@ export function reasoningResponse(reasoning: string, text?: string): StreamChunk
   return chunks
 }
 
+/** A capped response that spends its output budget in private reasoning. */
+export function reasoningMaxTokensResponse(reasoning: string, text?: string): StreamChunk[] {
+  const chunks = reasoningResponse(reasoning, text)
+  chunks[chunks.length - 1] = { type: 'finish', reason: { kind: 'max-tokens' } }
+  return chunks
+}
+
 /**
  * Like {@link textResponse} but the stream ends with a `max-tokens` finish —
  * the model was cut off at the output-token ceiling (DeepSeek's `length`).

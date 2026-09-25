@@ -172,6 +172,17 @@ Sources: [`packages/core/session/src/types.ts:431`](../packages/core/session/src
 
 Source: [`packages/core/agent-loop/src/degenerate-response.ts:10`](../packages/core/agent-loop/src/degenerate-response.ts)
 
+<a id="agentmax-token-continuation--log-only"></a>
+
+#### `agent/max-token-continuation` — log-only
+
+```ts persistence-catalog
+/** One reasoning-only output-cap finish scheduled for an automatic continuation step. */
+'agent/max-token-continuation': MaxTokenContinuationEventData
+```
+
+Source: [`packages/core/agent-loop/src/max-token-continuation.ts:12`](../packages/core/agent-loop/src/max-token-continuation.ts)
+
 <a id="agentinboxspliced--log-only"></a>
 
 #### `agent/inbox/spliced` — log-only

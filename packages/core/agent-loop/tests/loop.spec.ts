@@ -11,7 +11,7 @@ import AgentRegistry, { type Agent, type AssistantStreamFrame } from '@deepseek-
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { withDegenerateRecovery } from '../src/degenerate-response.ts'
-import { MockAdapter, maxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
+import { MockAdapter, maxTokensResponse, reasoningMaxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -29,7 +29,14 @@ function driverDone(agent: Agent): Promise<void> {
   return (agent as Agent & { done: Promise<void> }).done
 }
 
-async function harness(adapter: MockAdapter, persona = '') {
+async function harness(
+  adapter: MockAdapter,
+  persona = '',
+  loopOverrides: {
+    maxTokenContinuations?: number
+    maxTokenContinuationOutputTokens?: number
+  } = {},
+) {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -37,7 +44,7 @@ async function harness(adapter: MockAdapter, persona = '') {
   await ctx.plugin(SystemPrompt, { personaPrefix: persona })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: [], ...loopOverrides })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }
@@ -310,6 +317,122 @@ describe('agent loop', () => {
     expect(adapter.requests).toHaveLength(2)
     expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(1)
     expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
+  })
+
+  it('continues a reasoning-only max-token finish in a new step with the same request settings', async () => {
+    const effort = ReasoningEffortId('high')
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('I need to inspect the next dependency.'),
+      textResponse('finished after continuation'),
+    ], {
+      efforts: [{ id: effort, name: 'High' }],
+      defaultEffort: effort,
+    })
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('reasoning-cap-continuation'), {
+      provider: 'mock',
+      model: 'mock',
+      reasoningEffort: effort,
+      maxTokens: 32,
+    })
+
+    send(agent, 'continue until done')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests.map(request => request.reasoningEffort)).toEqual([effort, effort])
+    expect(adapter.requests.map(request => request.maxTokens)).toEqual([32, 32])
+    const secondTexts = adapter.requests[1]!.messages.flatMap(message =>
+      message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
+    expect(secondTexts.some(text => text.includes('Internal reasoning checkpoint'))).toBe(true)
+    expect(secondTexts.some(text => text.includes('Continue from the internal reasoning checkpoint'))).toBe(true)
+    const continuation = agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation')
+    expect(continuation).toHaveLength(1)
+    expect(continuation[0]?.type === 'agent/max-token-continuation' && continuation[0].data).toMatchObject({
+      turn: 1,
+      step: 1,
+      continuationStep: 2,
+      attempt: 1,
+    })
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
+  it('stops a continuation when the capped reasoning repeats the preceding checkpoint', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('same checkpoint reasoning'),
+      reasoningMaxTokensResponse('same checkpoint reasoning'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('repeated-reasoning-cap'), {
+      provider: 'mock', model: 'mock', maxTokens: 64,
+    })
+
+    send(agent, 'solve this')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens', autoContinuation: 'exhausted' } } })
+  })
+
+  it('does not auto-continue a capped response that already exposed visible text', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('private work', 'partial answer'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('visible-max-token'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens' } } })
+  })
+
+  it('allows reasoning-only continuation to be disabled by configuration', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('private work only'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter, '', { maxTokenContinuations: 0 })
+    const agent = await ctx.agentLoop.create(SessionId('disabled-max-token-continuation'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
+  })
+
+  it('bounds reasoning-only continuation by cumulative output tokens', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('1234567890'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter, '', { maxTokenContinuationOutputTokens: 5 })
+    const agent = await ctx.agentLoop.create(SessionId('max-token-output-budget'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
   })
 
   it('settles a failed attempt before retrying with a new dense attempt', async () => {

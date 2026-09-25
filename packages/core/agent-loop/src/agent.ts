@@ -41,6 +41,11 @@ import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
 import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
+import {
+  reasoningOnlyMaxTokenFacts,
+  repeatsMaxTokenCheckpoint,
+  withMaxTokenContinuation,
+} from './max-token-continuation.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -53,6 +58,8 @@ type Phase =
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
+
+type StepResult = StepEndReason | { kind: 'continue-max-tokens'; outputTokens: number }
 
 type PreparedStep =
   | { kind: 'reject' }
@@ -330,6 +337,11 @@ export class ReactLoopAgent implements Agent {
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
+    let maxTokenContinuations = 0
+    let maxTokenContinuationOutputTokens = 0
+    const maxTokenContinuationLimit = this.loopCtx.agentLoop.config.maxTokenContinuations.get()
+    const maxTokenContinuationOutputTokenLimit = this.loopCtx.agentLoop.config
+      .maxTokenContinuationOutputTokens.get()
     try {
       while (true) {
         signal.throwIfAborted()
@@ -350,11 +362,22 @@ export class ReactLoopAgent implements Agent {
         this.session.append('step/start', { turn, step })
         phase.step = step
         try {
-          // max-tokens is sticky: once any step hits the ceiling, later steps
-          // that complete normally must not downgrade the turn outcome.
-          const stepEnd = await this.step(decision)
-          // max-tokens stays sticky: a later completed step must not
-          // downgrade the turn outcome.
+          // A reasoning-only capped response can open another step without
+          // making max-tokens sticky; ordinary capped finishes remain terminal.
+          const stepEnd = await this.step(
+            decision,
+            maxTokenContinuations,
+            maxTokenContinuationLimit,
+            maxTokenContinuationOutputTokens,
+            maxTokenContinuationOutputTokenLimit,
+          )
+          if (stepEnd?.kind === 'continue-max-tokens') {
+            maxTokenContinuations += 1
+            maxTokenContinuationOutputTokens += stepEnd.outputTokens
+            target = 'next-step'
+            continue
+          }
+          // Ordinary max-tokens stays sticky if a plugin supplies later work.
           if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
         } finally {
           this.session.append('step/end', { turn, step })
@@ -399,7 +422,13 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
-  private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
+  private async step(
+    decision: Extract<PreparedStep, { kind: 'enter' }>,
+    maxTokenContinuations: number,
+    maxTokenContinuationLimit: number,
+    maxTokenContinuationOutputTokens: number,
+    maxTokenContinuationOutputTokenLimit: number,
+  ): Promise<StepResult | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
     const { turn, step, abort: { signal } } = this.phase
@@ -639,7 +668,65 @@ export class ReactLoopAgent implements Agent {
             stream: live.stream,
           }, { surfaceOp: 'append' }).seq,
         )
-        if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
+        if (finish.kind === 'max-tokens') {
+          const facts = reasoningOnlyMaxTokenFacts(message.content)
+          const outputTokens = live.usage?.outputTokens ?? request.maxTokens
+          const cumulativeOutputTokens = outputTokens === undefined
+            ? undefined
+            : maxTokenContinuationOutputTokens + outputTokens
+          const events = this.session.snapshotEvents()
+          const repeatedCheckpoint = facts !== undefined
+            && repeatsMaxTokenCheckpoint(events, turn, message.content)
+          if (facts !== undefined
+            && !repeatedCheckpoint
+            && maxTokenContinuations < maxTokenContinuationLimit
+            && outputTokens !== undefined
+            && cumulativeOutputTokens !== undefined
+            && cumulativeOutputTokens <= maxTokenContinuationOutputTokenLimit) {
+            const attempt = maxTokenContinuations + 1
+            this.session.append('agent/max-token-continuation', {
+              turn,
+              step,
+              continuationStep: step + 1,
+              attempt,
+              ...facts,
+              ...live.usage === undefined ? {} : { outputTokens: live.usage.outputTokens },
+              cumulativeOutputTokens,
+            })
+            this.loopCtx.logger.warn('agent "%s": automatically continuing reasoning-only max-tokens response: %o', this.id, {
+              provider: request.provider,
+              model: request.model,
+              turn,
+              step,
+              continuationStep: step + 1,
+              attempt,
+              maxTokenContinuationLimit,
+              maxTokenContinuationOutputTokenLimit,
+              ...facts,
+              outputTokens,
+              cumulativeOutputTokens,
+            })
+            return { kind: 'continue-max-tokens', outputTokens }
+          }
+          if (facts !== undefined) {
+            this.loopCtx.logger.warn('agent "%s": reasoning-only max-tokens continuation stopped: %o', this.id, {
+              provider: request.provider,
+              model: request.model,
+              turn,
+              step,
+              attempts: maxTokenContinuations,
+              maxTokenContinuationLimit,
+              outputTokens,
+              cumulativeOutputTokens,
+              maxTokenContinuationOutputTokenLimit,
+              repeatedCheckpoint,
+            })
+          }
+          return {
+            kind: 'max-tokens',
+            ...maxTokenContinuations === 0 ? {} : { autoContinuation: 'exhausted' },
+          }
+        }
 
         const toolCalls = message.content.filter(block => block.type === 'tool-call')
         if (toolCalls.length === 0) return { kind: 'completed' }
@@ -780,7 +867,11 @@ export class ReactLoopAgent implements Agent {
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)
-    const boundaryMessages = withDegenerateRecovery(session.snapshotEvents(), session.deriveMessages())
+    const events = session.snapshotEvents()
+    const boundaryMessages = withMaxTokenContinuation(
+      events,
+      withDegenerateRecovery(events, session.deriveMessages()),
+    )
     for (const message of boundaryMessages) {
       if (this.frozenMessages.has(message)) continue
       deepFreeze(message)
