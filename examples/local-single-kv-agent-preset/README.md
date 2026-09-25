@@ -16,7 +16,7 @@ Then select **Local single-KV** for new sessions.
 
 ## Host Subagent limits
 
-The Agent preset cannot own Host services, so set these separately under **Plugins → Subagent**:
+The Agent preset cannot own Host services, so set these separately under **Plugins → Subagent**. The tool intentionally inherits the Host recursion-depth policy, so changing that value to `0` still disables delegation globally:
 
 ```text
 Maximum recursion depth:            1
@@ -24,7 +24,7 @@ Continuable Subagent live limit:    1
 One-shot concurrent run limit:      1
 ```
 
-The preset itself makes the ordinary `subagent` tool use `spawn` in foreground `one-shot` mode, removes `run_in_background`, fixes its depth to 1, and disables `subagent_fork` by default. Workflow calls still share the Host's `maxConcurrentRuns` FIFO gate, so a workflow cannot bypass the single-run limit.
+The preset itself makes the ordinary `subagent` tool use `spawn` in foreground `one-shot` mode, removes `run_in_background`, inherits the Host recursion-depth policy, and disables `subagent_fork` by default. Workflow calls still share the Host's `maxConcurrentRuns` FIFO gate, so a workflow cannot bypass the single-run limit.
 
 This intentionally produces phase-oriented delegation:
 
