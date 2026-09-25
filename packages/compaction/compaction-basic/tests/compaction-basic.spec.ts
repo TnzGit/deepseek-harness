@@ -1700,6 +1700,20 @@ describe('automatic listener and loader composition', () => {
     return Object.assign(new Error(message), { code: CONTEXT_WINDOW_EXCEEDED_CODE })
   }
 
+  function measuredOverflow(): Error & { code: string } {
+    return overflow(
+      "This model's maximum context length is 128000 tokens. However, you requested 32255 output tokens"
+      + ' and your prompt contains 95746 input tokens, for a total of 128001 tokens.',
+    )
+  }
+
+  function sentinelOverflow(): Error & { code: string } {
+    return overflow(
+      "This model's maximum context length is 128000 tokens. However, you requested 32255 output tokens"
+      + ' and your prompt contains at least 95746 input tokens, for a total of at least 128001 tokens.',
+    )
+  }
+
   it('compacts before a step above threshold using the durable routed model and remains idle below it', async () => {
     const ctx = createContext()
     const compact = new TestCompactionEngine(ctx, {
@@ -1912,6 +1926,69 @@ describe('automatic listener and loader composition', () => {
     expect(session.snapshotEvents().findLast(event => event.type === 'compaction/end')?.data)
       .toMatchObject({ error: 'summary unavailable after prune' })
     expect(warnings).toContainEqual(expect.stringContaining('retrying from the replacement surface'))
+  })
+
+  it('preserves the provider error when failed compaction frees less than recount headroom', async () => {
+    const ctx = createContext(128_000)
+    const warnings: string[] = []
+    ctx.logger.warn = ((message: string) => void warnings.push(message)) as typeof ctx.logger.warn
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary hit its output cap')
+    const session = oversizedToolResult(300, true)
+
+    expect(await recover(ctx, agent(session, MODEL), measuredOverflow())).toBe(false)
+    expect(session.surface.replaceGeneration).toBe(1)
+    expect(warnings).toContainEqual(expect.stringContaining('preserving the original request error'))
+  })
+
+  it('retries after failed compaction when pruning alone clears measured recount headroom', async () => {
+    const ctx = createContext(128_000)
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary hit its output cap')
+    const session = oversizedToolResult(20_000, true)
+
+    expect(await recover(ctx, agent(session, MODEL), measuredOverflow())).toBe(true)
+    expect(session.surface.replaceGeneration).toBe(1)
+  })
+
+  it('uses the local post-rewrite measurement for a vLLM lower-bound sentinel', async () => {
+    const ctx = createContext(128_000)
+    void new ToolResultPruner(ctx, {
+      thresholdChars: 100,
+      headChars: 20,
+      tailChars: 10,
+    })
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    compact.error = new Error('summary unavailable after prune')
+    const session = oversizedToolResult(300, true)
+
+    expect(await recover(ctx, agent(session, MODEL), sentinelOverflow())).toBe(true)
+    expect(session.surface.replaceGeneration).toBe(1)
   })
 
   it('lets cancellation win when summary throws after a durable prune', async () => {

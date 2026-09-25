@@ -9,7 +9,12 @@ import z from '@deepseek-ai/schemastery'
 import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
-import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import {
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  contextAdaptMargin,
+  contextOverflowRetryRelief,
+  parseContextOverflowNumbers,
+} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -76,6 +81,29 @@ function conversationTarget(
   if (agent.options.provider === undefined || agent.options.provider.length === 0
     || agent.options.model === undefined || agent.options.model.length === 0) return undefined
   return { provider: agent.options.provider, model: agent.options.model }
+}
+
+/** Decide whether a durable rewrite freed enough measured input for one safe retry. */
+function hasOverflowRetryProgress(
+  failure: { readonly message: string },
+  beforeTokens: number,
+  afterTokens: number,
+): boolean {
+  const reduction = beforeTokens - afterTokens
+  if (reduction <= 0) return false
+  const numbers = parseContextOverflowNumbers(failure.message)
+  if (numbers?.inputTokensKind === 'lower-bound') {
+    if (numbers.requestedOutputTokens === undefined) return false
+    return afterTokens + numbers.requestedOutputTokens + contextAdaptMargin(numbers.contextLength)
+      <= numbers.contextLength
+  }
+  const required = contextOverflowRetryRelief(failure.message)
+  return required === undefined || reduction >= required
+}
+
+/** Re-read a signal whose state may have changed across an awaited recovery. */
+function isSignalAborted(signal: AbortSignal): boolean {
+  return signal.aborted
 }
 
 const thresholdRatioSchema = z.number()
@@ -200,16 +228,48 @@ export class BasicCompactionEngine extends CompactionEngine {
       if (retries >= policy.maxOverflowRetries) return next()
 
       const generation = agent.session.surface.replaceGeneration
+      let beforeTokens: number
+      try {
+        beforeTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens
+      } catch (measurementError: unknown) {
+        const message = measurementError instanceof Error
+          ? measurementError.message
+          : String(measurementError)
+        ctx.logger.warn(
+          `context-overflow recovery could not measure the original surface: ${message}; `
+          + 'preserving the original request error',
+        )
+        return next()
+      }
+      const hasMeasuredRetryProgress = (): boolean => {
+        try {
+          return hasOverflowRetryProgress(
+            failure,
+            beforeTokens,
+            this.ctx.tokenMeter.measure(agent.session).totalTokens,
+          )
+        } catch (measurementError: unknown) {
+          const message = measurementError instanceof Error
+            ? measurementError.message
+            : String(measurementError)
+          ctx.logger.warn(
+            `context-overflow recovery could not remeasure the replacement surface: ${message}; `
+            + 'preserving the original request error',
+          )
+          return false
+        }
+      }
       let result: CompactionResult | null
       try {
         result = await this.compactIfNeeded(agent, 'context-overflow', signal)
       } catch (recoveryError: unknown) {
         const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
-        // A model-free prune can land before later summary work fails. That
-        // durable reduction is sufficient retry proof; do not discard it just
-        // because the optional second phase threw. Cancellation still wins.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-        if (!signal.aborted && agent.session.surface.replaceGeneration > generation) {
+        // A model-free prune can land before later summary work fails. Retry
+        // only when measured relief covers the provider's exact deficit plus
+        // recount headroom (or fits beneath a vLLM lower-bound sentinel).
+        if (!isSignalAborted(signal)
+          && agent.session.surface.replaceGeneration > generation
+          && hasMeasuredRetryProgress()) {
           ctx.logger.warn(
             `context-overflow compaction failed after durable surface progress: ${message}; `
             + 'retrying from the replacement surface',
@@ -218,16 +278,21 @@ export class BasicCompactionEngine extends CompactionEngine {
           return { kind: 'retry' }
         }
         ctx.logger.warn(
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-          `context-overflow compaction failed: ${message}; ${signal.aborted
+          `context-overflow compaction failed: ${message}; ${isSignalAborted(signal)
             ? 'cancellation prevents retry'
             : 'preserving the original request error'}`,
         )
         return next()
       }
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
-      if (signal.aborted
+      if (isSignalAborted(signal)
         || agent.session.surface.replaceGeneration <= generation) return next()
+      if (!hasMeasuredRetryProgress()) {
+        ctx.logger.warn(
+          'context-overflow compaction did not free enough estimated input tokens; '
+          + 'preserving the original request error',
+        )
+        return next()
+      }
       if (result !== null) logResult(result, 'context overflow recovery')
       this.overflowRetries.set(agent, retries + 1)
       return { kind: 'retry' }
