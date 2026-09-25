@@ -54,12 +54,6 @@ kind: "package-reference"
 
 容量耗尽时，新建或冷恢复以 `ACTIVATION_LIMIT_REACHED` 拒绝（浏览器消息返回 `subagent/delivery-unavailable`）：等待子代理完成，或继续使用现有代理。接纳不会排队，避免等待后代的父代理又等待自己占用的名额。名额仅存在于当前进程，不限制累计 Session 历史或 token 用量。
 
-### 一次性运行容量
-
-在 Host 的 `dsh-subagent` 插件上设置 `maxConcurrentRuns`，限制所有 provider 中真正处于执行状态的一次性运行数量。默认值为 `8`，接受正安全整数。所有 `ctx.subagents.start()` 调用方共享同一条 FIFO 接纳队列，包括普通委派工具以及 workflow／Ralph 消费方。排队中的启动可以被取消，且不会触达 provider。名额在 `provider.start()` 前预占，一直持有到 `run.result` 结算；provider 启动失败会立即归还。运行时调高该值会立即接纳排队工作；调低不会取消已接纳运行，而是等待使用量降到新上限以下。
-
-对于 KV 缓存只能容纳一个长上下文的单一本地推理引擎，保守配置是同时设置 `maxConcurrentRuns: 1` 与 `maxActiveSubagents: 1`，并把 spawn 委派工具配置为 `backgroundMode: one-shot`、`enableRunInBackground: false`，默认禁用 fork 委派。并发运行上限只负责把 child 与 child 串行化；使用前台 one-shot 委派，才能同时避免 Main 与后台 child 之间的 KV 来回抖动。`agentOptions.maxTokens` 只限制 completion 输出预算，并不会限制 child 的 prompt/KV 占用。
-
 ### 一次性与可继续子级
 
 一次性子 agent 只运行一次，并以单个结果结算，可附带可选的结构化输出与失败时的安全诊断。启动请求可以通过 `agentOptions` 覆盖子 Agent 的提供方、模型、推理强度与输出 token 上限；每个请求的选项都要求提供方声明对应能力。可继续子 agent 保留持久会话并按顺序接受后续消息：调用方收到稳定的子 agent id、发送相邻 Agent 消息，并可中断当前轮次而不销毁子 agent。工具行的 `backgroundMode` 选择形态（默认 `one-shot`，或在支持的提供方上使用 `continuable`）。
