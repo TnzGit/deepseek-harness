@@ -26,22 +26,24 @@ jobs:
           package-manager-cache: false
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Run local-inference LLM regressions
+      - name: Run local-inference migration regressions
         run: >-
           pnpm exec vitest run
+          packages/subagent/subagent/tests/run-admission.spec.ts
+          packages/subagent/subagent/tests/service.spec.ts
           packages/llm/llm-pi-ai/tests/convert.spec.ts
           packages/llm/llm-pi-ai/tests/adapter.spec.ts
           packages/llm/llm-deepseek/tests/stream.spec.ts
           packages/util/timeout/tests/timeout.spec.ts
-          packages/llm/llm/src/retry-policy.ts
-          packages/llm/llm/tests/retry-policy.spec.ts
-          packages/llm/llm-retry/src/index.ts
-          packages/llm/llm-retry/tests/retry.spec.ts
           packages/llm/llm/tests/retry-policy.spec.ts
           packages/llm/llm-retry/tests/retry.spec.ts
-      - name: Lint changed LLM and timeout files
+      - name: Lint changed migration files
         run: >-
           pnpm exec oxlint
+          packages/subagent/subagent/src/run-admission.ts
+          packages/subagent/subagent/src/index.ts
+          packages/subagent/subagent/tests/run-admission.spec.ts
+          packages/subagent/subagent/tests/service.spec.ts
           packages/llm/llm-pi-ai/src/stream.ts
           packages/llm/llm-pi-ai/src/adapter.ts
           packages/llm/llm-pi-ai/src/config.ts
@@ -52,3 +54,7 @@ jobs:
           packages/llm/llm-deepseek/tests/stream.spec.ts
           packages/util/timeout/src/index.ts
           packages/util/timeout/tests/timeout.spec.ts
+          packages/llm/llm/src/retry-policy.ts
+          packages/llm/llm/tests/retry-policy.spec.ts
+          packages/llm/llm-retry/src/index.ts
+          packages/llm/llm-retry/tests/retry.spec.ts
