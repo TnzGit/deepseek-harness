@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, DEGENERATE_RESPONSE_CODE, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -10,7 +10,7 @@ import AgentRegistry, { type Agent, type AssistantStreamFrame } from '@deepseek-
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, maxTokensResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
+import { MockAdapter, maxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -180,6 +180,87 @@ describe('agent loop', () => {
       type: 'turn/end',
       data: { reason: { kind: 'error' } },
     })
+  })
+
+  it.each([
+    ['reasoning followed by punctuation', reasoningResponse('Let me write the parser.', '.')],
+    ['reasoning without visible text', reasoningResponse('I should continue implementing this')],
+  ])('recovers once from %s without persisting the internal prompt', async (_label, degenerate) => {
+    const adapter = new MockAdapter([degenerate, textResponse('implementation complete')])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('degenerate-recovery'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'implement the parser')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    const recovery = adapter.requests[1]!.messages.at(-1)
+    expect(recovery?.source).toEqual({ kind: 'agent-loop-degenerate-recovery' })
+    const recoveryText = recovery?.content.find(block => block.type === 'text')
+    expect(recoveryText?.type === 'text' && recoveryText.text)
+      .toContain('without producing a usable final answer or tool call')
+    expect(userTexts(agent)).toEqual(['implement the parser'])
+    expect(agent.session.deriveMessages().some(message =>
+      message.source.kind === 'agent-loop-degenerate-recovery')).toBe(false)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message'))
+      .toHaveLength(1)
+  })
+
+  it('surfaces DEGENERATE_RESPONSE after one recovery instead of looping', async () => {
+    const adapter = new MockAdapter([
+      reasoningResponse('I will act now', '.'),
+      reasoningResponse('Trying again', '...'),
+      textResponse('must not be requested'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('repeated-degenerate'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'continue the work')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(0)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt')).toHaveLength(2)
+    const turnEnd = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toMatchObject({
+      kind: 'error',
+      error: { code: DEGENERATE_RESPONSE_CODE },
+    })
+  })
+
+  it.each(['OK', '✅'])('accepts the short visible answer %s', async (answer) => {
+    const adapter = new MockAdapter([reasoningResponse('Short answer is sufficient', answer)])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId(`valid-short-${answer}`), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'answer briefly')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(1)
+  })
+
+  it('recovers a provider-normalized EMPTY_RESPONSE through the same one-shot path', async () => {
+    const adapter = new MockAdapter([
+      [
+        { type: 'usage', usage: { inputTokens: 10, outputTokens: 0 } },
+        { type: 'finish', reason: { kind: 'error', failure: { code: 'EMPTY_RESPONSE', message: 'empty' } } },
+      ],
+      textResponse('recovered'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('normalized-empty-response'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'do the work')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
   })
 
   it('settles a failed attempt before retrying with a new dense attempt', async () => {

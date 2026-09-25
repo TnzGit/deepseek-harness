@@ -16,8 +16,10 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
-import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
+  DEGENERATE_RESPONSE_CODE,
+  EMPTY_RESPONSE_CODE,
   LlmError,
   createAssistantMessage,
   createDeveloperMessage,
@@ -38,6 +40,7 @@ import { RuntimeContextProjection } from './runtime-context.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
+import { withDegenerateRecovery } from './degenerate-response.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -59,6 +62,24 @@ type PreparedStep =
     startsRequestSeries?: true
     assembly: PromptAssembly
   }
+
+interface DegenerateResponseFacts {
+  visibleCharacters: number
+  toolCallCount: number
+}
+
+/** Reasoning is private work, not a visible answer; emoji and symbols remain valid short replies. */
+function degenerateResponseFacts(content: readonly ContentBlock[]): DegenerateResponseFacts | undefined {
+  const toolCallCount = content.filter(block => block.type === 'tool-call').length
+  if (toolCallCount > 0) return
+  const visible = content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim()
+  if (visible !== '' && !/^[\p{P}\s]+$/u.test(visible)) return
+  return { visibleCharacters: Array.from(visible).length, toolCallCount }
+}
 
 /** Remove adapter-derived values before plugins propose the next request config. */
 function requestProposal(header: EpochHeader): LlmCallConfig {
@@ -387,6 +408,7 @@ export class ReactLoopAgent implements Agent {
     const { assembly } = decision
     const renderedPrompt = renderPrompt(assembly)
     let firstAttempt = true
+    let degenerateRecoveryUsed = false
     while (true) {
       const { config, preparedCall } = await this.prepareRequest(turn, step, signal)
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
@@ -469,6 +491,54 @@ export class ReactLoopAgent implements Agent {
       }
       try {
         const finish = live.finish
+        const settleDegenerateAttempt = (
+          attempt: 1 | 2,
+          action: 'retry' | 'error',
+          facts: DegenerateResponseFacts,
+        ): void => {
+          live.settle(
+            'assistant/attempt',
+            () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+          )
+          this.session.append('agent/degenerate-response', {
+            turn,
+            step,
+            provider: request.provider,
+            model: request.model,
+            attempt,
+            action,
+            finishKind: 'stop',
+            ...facts,
+            ...live.usage === undefined ? {} : { outputTokens: live.usage.outputTokens },
+          })
+        }
+        const recoverDegenerate = (facts: DegenerateResponseFacts): boolean => {
+          const attempt = degenerateRecoveryUsed ? 2 : 1
+          const action = degenerateRecoveryUsed ? 'error' : 'retry'
+          settleDegenerateAttempt(attempt, action, facts)
+          this.loopCtx.logger.warn('agent "%s": detected degenerate model response: %o', this.id, {
+            provider: request.provider,
+            model: request.model,
+            turn,
+            step,
+            attempt,
+            outputTokens: live.usage?.outputTokens,
+            finishKind: 'stop',
+            ...facts,
+          })
+          if (degenerateRecoveryUsed) {
+            throw new LlmError(
+              `model "${request.model}" repeatedly stopped without a usable visible answer or tool call`,
+              DEGENERATE_RESPONSE_CODE,
+            )
+          }
+          degenerateRecoveryUsed = true
+          return true
+        }
+
+        if (finish.kind === 'error' && finish.failure.code === EMPTY_RESPONSE_CODE) {
+          if (recoverDegenerate({ visibleCharacters: 0, toolCallCount: 0 })) continue
+        }
         if (finish.kind === 'error' || finish.kind === 'aborted') {
           live.settle(
             'assistant/attempt',
@@ -492,8 +562,14 @@ export class ReactLoopAgent implements Agent {
           continue
         }
 
+        const content = live.blocks()
+        if (finish.kind === 'stop') {
+          const facts = degenerateResponseFacts(content)
+          if (facts !== undefined && recoverDegenerate(facts)) continue
+        }
+
         const message = createAssistantMessage({
-          content: live.blocks(),
+          content,
           source: {
             provider: request.provider,
             model: request.model,
@@ -651,7 +727,7 @@ export class ReactLoopAgent implements Agent {
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)
-    const boundaryMessages = session.deriveMessages()
+    const boundaryMessages = withDegenerateRecovery(session.snapshotEvents(), session.deriveMessages())
     for (const message of boundaryMessages) {
       if (this.frozenMessages.has(message)) continue
       deepFreeze(message)
