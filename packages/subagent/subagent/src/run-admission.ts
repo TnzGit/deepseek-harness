@@ -32,15 +32,21 @@ export class OneShotRunAdmission {
   acquire(signal: AbortSignal): Promise<() => void> {
     signal.throwIfAborted()
     return new Promise<() => void>((resolve, reject) => {
-      let queued!: PendingAdmission
-      const onAbort = (): void => {
-        const index = this.pending.indexOf(queued)
-        if (index >= 0) this.pending.splice(index, 1)
-        reject(signal.reason)
-        this.drain()
+      const queued: PendingAdmission = {
+        signal,
+        resolve,
+        reject,
+        onAbort: () => {
+          const index = this.pending.indexOf(queued)
+          if (index >= 0) this.pending.splice(index, 1)
+          const reason: unknown = signal.reason
+          reject(reason instanceof Error
+            ? reason
+            : new Error('subagent execution wait aborted', { cause: reason }))
+          this.drain()
+        },
       }
-      queued = { signal, resolve, reject, onAbort }
-      signal.addEventListener('abort', onAbort, { once: true })
+      signal.addEventListener('abort', queued.onAbort, { once: true })
       this.pending.push(queued)
       this.drain()
     })
@@ -54,7 +60,8 @@ export class OneShotRunAdmission {
   private drain(): void {
     const capacity = this.capacity()
     while (this.active < capacity && this.pending.length > 0) {
-      const queued = this.pending.shift()!
+      const queued = this.pending.shift()
+      if (queued === undefined) break
       queued.signal.removeEventListener('abort', queued.onAbort)
       if (queued.signal.aborted) {
         queued.reject(queued.signal.reason)
