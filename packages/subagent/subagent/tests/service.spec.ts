@@ -22,8 +22,11 @@ import SubagentRuntime, {
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 
-function fakeParent(id = 'parent-1'): Agent {
-  return { id: SessionId(id) } as unknown as Agent
+function fakeParent(id = 'parent-1', origin?: 'subagent'): Agent {
+  return {
+    id: SessionId(id),
+    session: { header: { id: SessionId(id), ...origin === undefined ? {} : { origin } } },
+  } as unknown as Agent
 }
 
 const ALL_CAPS: SubagentCapabilities = { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true }
@@ -197,6 +200,25 @@ describe('SubagentRuntime', () => {
     expect(attempts).toBe(2)
     gated.settle(0)
     await second.result
+    await ctx.fiber.dispose()
+  })
+
+  it('fails nested one-shot starts fast at capacity instead of deadlocking behind their parent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'root child' }))
+    await expect(ctx.subagents.start('gated', baseRequest({
+      label: 'nested child',
+      parent: fakeParent('nested-parent', 'subagent'),
+    }))).rejects.toMatchObject({ code: 'EXECUTION_LIMIT_REACHED' })
+    expect(provider.starts).toEqual(['root child'])
+
+    provider.settle(0)
+    await first.result
     await ctx.fiber.dispose()
   })
 
