@@ -7,6 +7,13 @@ interface PendingAdmission {
   readonly onAbort: () => void
 }
 
+/** Preserve an Error abort reason and normalize hostile non-Error reasons. */
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error('subagent start aborted while waiting for one-shot execution capacity', { cause: signal.reason })
+}
+
 /**
  * Bound one-shot provider execution without coupling sibling run settlement.
  *
@@ -22,7 +29,7 @@ export class OneShotRunAdmission {
 
   /** Reserve immediately without bypassing already queued callers. */
   tryAcquire(signal: AbortSignal): (() => void) | undefined {
-    signal.throwIfAborted()
+    if (signal.aborted) throw abortError(signal)
     if (this.pending.length > 0 || this.active >= this.capacity()) return undefined
     this.active += 1
     return this.release()
