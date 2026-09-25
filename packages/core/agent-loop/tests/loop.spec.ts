@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, DEGENERATE_RESPONSE_CODE, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createAssistantMessage, createUserMessage, DEGENERATE_RESPONSE_CODE, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -10,6 +10,7 @@ import AgentRegistry, { type Agent, type AssistantStreamFrame } from '@deepseek-
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { withDegenerateRecovery } from '../src/degenerate-response.ts'
 import { MockAdapter, maxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -230,6 +231,54 @@ describe('agent loop', () => {
       kind: 'error',
       error: { code: DEGENERATE_RESPONSE_CODE },
     })
+  })
+
+  it('cuts off repeated punctuation reasoning during streaming and recovers once', async () => {
+    const adapter = new MockAdapter([
+      reasoningResponse('!'.repeat(96)),
+      textResponse('recovered from repetition'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('stream-repetition-recovery'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'find the plugin')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests[1]!.messages.at(-1)?.source)
+      .toEqual({ kind: 'agent-loop-degenerate-recovery' })
+    const recovery = agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')
+    expect(recovery).toHaveLength(1)
+    expect(recovery[0]?.type === 'agent/degenerate-response' && recovery[0].data).toMatchObject({
+      attempt: 1,
+      action: 'retry',
+      finishKind: 'stream-repetition',
+      repeatedCharacter: '!',
+      repeatedCharacters: 64,
+    })
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+    const assistantMessages = agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')
+    expect(assistantMessages).toHaveLength(1)
+    expect(assistantMessages[0]?.type === 'assistant/message' && assistantMessages[0].data.message.content)
+      .toEqual([{ type: 'text', text: 'recovered from repetition' }])
+  })
+
+  it('keeps contaminated interrupted reasoning visible but excludes it from model replay', () => {
+    const contaminated = createAssistantMessage({
+      content: [{ type: 'reasoning', text: '!'.repeat(40) }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+    const ordinary = createAssistantMessage({
+      content: [{ type: 'reasoning', text: 'I should inspect the repository.' }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+    const shortPunctuation = createAssistantMessage({
+      content: [{ type: 'reasoning', text: '!!!' }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+
+    expect(withDegenerateRecovery([], [contaminated, ordinary, shortPunctuation]))
+      .toEqual([ordinary, shortPunctuation])
   })
 
   it.each(['OK', '✅'])('accepts the short visible answer %s', async (answer) => {

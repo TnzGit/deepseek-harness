@@ -40,7 +40,7 @@ import { RuntimeContextProjection } from './runtime-context.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
-import { withDegenerateRecovery } from './degenerate-response.ts'
+import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -410,7 +410,9 @@ export class ReactLoopAgent implements Agent {
     let firstAttempt = true
     let degenerateRecoveryUsed = false
     while (true) {
-      const { config, preparedCall } = await this.prepareRequest(turn, step, signal)
+      const attemptAbort = new AbortController()
+      const attemptSignal = AbortSignal.any([signal, attemptAbort.signal])
+      const { config, preparedCall } = await this.prepareRequest(turn, step, attemptSignal)
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
       const commits = this.systemPrompt.project(renderedPrompt, {
         inHistory: preparedCall?.systemPromptUpdate === 'in-history',
@@ -427,7 +429,7 @@ export class ReactLoopAgent implements Agent {
         }
       }
       firstAttempt = false
-      const request = this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal)
+      const request = this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, attemptSignal)
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -437,57 +439,108 @@ export class ReactLoopAgent implements Agent {
         (frame) => { this.dispatch.emit('agent/assistant-stream', { frame }) },
       )
       let started = false
+      const repetitionDetector = new StreamRepetitionDetector()
+      let streamRepetition: ReturnType<StreamRepetitionDetector['push']>
       try {
         const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)
-        signal.throwIfAborted()
+        attemptSignal.throwIfAborted()
         live.start()
         started = true
         for await (const chunk of stream) {
           signal.throwIfAborted()
+          streamRepetition = repetitionDetector.push(chunk)
+          if (streamRepetition !== undefined) {
+            attemptAbort.abort(new Error('degenerate model stream repetition'))
+            break
+          }
           live.push(chunk)
         }
-        signal.throwIfAborted()
+        if (streamRepetition === undefined) attemptSignal.throwIfAborted()
       } catch (error: unknown) {
         if (!started) throw error
-        try {
-          if (signal.aborted) {
-            const content = live.interruptedBlocks()
-            if (content.length > 0) {
-              live.settle('assistant/message', () => this.session.append('assistant/message', {
-                turn,
-                step,
-                message: createAssistantMessage({
-                  content,
-                  source: {
-                    provider: request.provider,
-                    model: request.model,
-                    ...live.replayState === undefined ? {} : { replayState: live.replayState },
-                  },
-                }),
-                interrupted: true,
-                ...live.usage === undefined ? {} : { usage: live.usage },
-                stream: live.stream,
-              }, { surfaceOp: 'append' }).seq)
+        if (streamRepetition !== undefined && !signal.aborted) {
+          // The attempt-local guard aborted its own producer. The attempt is
+          // settled below as a recoverable degenerate stream, not as a turn abort.
+        } else {
+          try {
+            if (signal.aborted) {
+              const content = live.interruptedBlocks()
+              if (content.length > 0) {
+                live.settle('assistant/message', () => this.session.append('assistant/message', {
+                  turn,
+                  step,
+                  message: createAssistantMessage({
+                    content,
+                    source: {
+                      provider: request.provider,
+                      model: request.model,
+                      ...live.replayState === undefined ? {} : { replayState: live.replayState },
+                    },
+                  }),
+                  interrupted: true,
+                  ...live.usage === undefined ? {} : { usage: live.usage },
+                  stream: live.stream,
+                }, { surfaceOp: 'append' }).seq)
+              } else {
+                live.settle(
+                  'assistant/attempt',
+                  () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+                )
+              }
             } else {
               live.settle(
                 'assistant/attempt',
                 () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
               )
             }
-          } else {
-            live.settle(
-              'assistant/attempt',
-              () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+          } catch (settlementError: unknown) {
+            throw new AggregateError(
+              [error, settlementError],
+              'Assistant stream failed and its durable settlement was rejected',
+              { cause: error },
             )
           }
-        } catch (settlementError: unknown) {
-          throw new AggregateError(
-            [error, settlementError],
-            'Assistant stream failed and its durable settlement was rejected',
-            { cause: error },
+          throw error
+        }
+      }
+      if (streamRepetition !== undefined) {
+        live.settle(
+          'assistant/attempt',
+          () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+        )
+        const attempt = degenerateRecoveryUsed ? 2 : 1
+        const action = degenerateRecoveryUsed ? 'error' : 'retry'
+        this.session.append('agent/degenerate-response', {
+          turn,
+          step,
+          provider: request.provider,
+          model: request.model,
+          attempt,
+          action,
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        this.loopCtx.logger.warn('agent "%s": detected degenerate model stream repetition: %o', this.id, {
+          provider: request.provider,
+          model: request.model,
+          turn,
+          step,
+          attempt,
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        if (degenerateRecoveryUsed) {
+          throw new LlmError(
+            `model "${request.model}" repeatedly streamed degenerate punctuation reasoning`,
+            DEGENERATE_RESPONSE_CODE,
           )
         }
-        throw error
+        degenerateRecoveryUsed = true
+        continue
       }
       try {
         const finish = live.finish
