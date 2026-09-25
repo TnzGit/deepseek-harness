@@ -1,0 +1,43 @@
+name: TNZ Phase 1 validation
+
+on:
+  push:
+    branches:
+      - 2026-09-25_dsh-0-1-7-integration
+
+permissions:
+  contents: read
+
+jobs:
+  phase1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          package-manager-cache: false
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Run focused Phase 1 unit and settings tests
+        run: >-
+          pnpm exec vitest run
+          packages/subagent/subagent/tests/run-admission.spec.ts
+          packages/subagent/subagent/tests/service.spec.ts
+          packages/client/ui-settings-subagent/tests/controllers.client.spec.ts
+          packages/client/ui-settings-subagent/tests/card.client.spec.tsx
+      - name: Verify generated config catalog
+        run: pnpm run verify-config-catalog
+      - name: Verify Cordis configurations
+        run: pnpm run verify-cordis-config
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Lint
+        run: pnpm run lint
