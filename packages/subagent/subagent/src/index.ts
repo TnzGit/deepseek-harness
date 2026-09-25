@@ -189,7 +189,7 @@ interface BrowserPromptSource {
   readonly clientTimeZone?: string
 }
 
-/** Host configuration for continuable subagent capacity. */
+/** Host configuration for delegation depth, continuable residency, and one-shot execution capacity. */
 export interface Config {
   /** Maximum live children sharing uninterrupted continuable parent links; defaults to 8. */
   maxActiveSubagents: Volatile<number>
