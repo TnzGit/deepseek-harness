@@ -518,6 +518,7 @@ describe('SubagentLimitsCardController', () => {
     expect(host.scope.getSnapshot().value).toEqual({ maxDepth: 0, maxActiveSubagents: 12, maxConcurrentRuns: 2 })
     face.resetField('maxDepth')
     face.edit('maxActiveSubagents', '')
+    face.edit('maxConcurrentRuns', '')
     expect(state().invalid).toBe(false)
     face.save()
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
