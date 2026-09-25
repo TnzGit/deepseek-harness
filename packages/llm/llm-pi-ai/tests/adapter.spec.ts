@@ -183,6 +183,21 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests).toHaveLength(2)
   })
 
+  it.each(['compaction', 'session-title'] as const)('disables supported reasoning for %s requests', async (purpose) => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      reasoningEffort: ReasoningEffortId('max'),
+      purpose,
+      messages: [],
+    })
+
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+  })
+
   it('preserves omitted profile options when constructing the adapter directly', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = new Context()
