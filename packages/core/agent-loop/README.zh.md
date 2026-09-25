@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-agent-loop` 创建全新 agent 或恢复持久化会话，随后通过模型请求、流式响应、工具执行和持久会话历史驱动每个轮次。标准 agent 组合应挂载本包；声明式条目会在启动时启动 agent，公开的 `ctx.agents` API 则支持以编程方式创建和恢复 agent。`maxParallelToolCalls` 限制同时运行的并行安全调用数量，独占调用保留顺序。取消会保留已经流式交付给用户的文本。只有标准的「调用模型、运行工具、重复」生命周期无法满足需求时，才应选择自定义 `Agent` 实现。
+`dsh-agent-loop` 创建全新 agent 或恢复持久化会话，随后通过模型请求、流式响应、工具执行和持久会话历史驱动每个轮次。标准 agent 组合应挂载本包；声明式条目会在启动时启动 agent，公开的 `ctx.agents` API 则支持以编程方式创建和恢复 agent。`maxParallelToolCalls` 限制同时运行的并行安全调用数量，独占调用保留顺序。输出触顶且内容可用时，循环会在可配置的安全上限内自动续跑同一轮次。取消会保留已经流式交付给用户的文本。只有标准的「调用模型、运行工具、重复」生命周期无法满足需求时，才应选择自定义 `Agent` 实现。
 
 ## 目录
 
@@ -46,6 +46,8 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `maxParallelToolCalls` | `10` | 每个步骤同时在途的并行安全工具调用数；`1` 为串行 |
+| `maxOutputContinuations` | `16` | 单轮输出触顶后的自动续跑请求次数上限；`0` 表示关闭 |
+| `maxContinuedOutputTokens` | `524288` | 单轮累计输出 token 达到此值后停止自动续跑 |
 | `agents[].id` | 必填 | 稳定标签；未设置 `sessionId` 时，全新会话会生成 `${id}-session-<uuid>` |
 | `agents[].provider` / `agents[].model` | — | 模型路由；分发前两者都必须存在 |
 | `agents[].reasoningEffort` | — | 非空的初始推理等级；`agent/request` 可以覆盖它 |
@@ -54,7 +56,7 @@ kind: "package-reference"
 | `agents[].sessionId` | — | 确切身份：首次使用创建，重新挂载时恢复已实体化的历史 |
 | `agents[].resumeSessionId` | — | 加载这个持久化会话而不是创建新会话；与 `sessionId` 互斥 |
 
-生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-agent-loop)是每个受支持字段的穷尽式真源。适配器会校验有效推理等级，循环则把它记录在请求头中。`maxParallelToolCalls` 也是整个 `agent-loop` 设置分节，因此叠加在该条目之上的用户层无需重启即可限制下一组工具调用。
+生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-agent-loop)是每个受支持字段的穷尽式真源。适配器会校验有效推理等级，循环则把它记录在请求头中。这三个循环上限都可通过 `agent-loop` 设置分节调整，且无需重启服务。
 
 ### 以编程方式创建或恢复 agent
 
@@ -73,6 +75,8 @@ const handle = await ctx.agents.create({
 ### 一个步骤做什么
 
 每个步骤都会发送会话的派生历史——最新的非空 `system/message` 节点是有效提示词，渲染提示词为空时则没有系统消息——及其可见工具 schema；模型的工具调用经过受守卫的工具流水线，每个被接纳的事实都会在下一步据此派生之前追加到会话日志。并行安全调用最多可重叠 `maxParallelToolCalls` 个；独占调用单独运行并构成排序屏障。取消是协作式的：`agent.cancel()` 中止当前活动，并在未设置 `keepInbox` 时清除待处理工作；被取消的流会终结已送达用户的文本。
+
+响应达到单次请求的输出上限时，循环保留部分 assistant 消息及提供方回放元数据，记录一条简短的内部续跑提示，并使用相同模型设置开始下一步骤。正常的步骤间压缩策略可在该请求前运行。续跑完成后，整个轮次以 completed 而不是 max-tokens 结束。输出为空、重复输出、达到续跑次数上限或累计输出 token 上限时，轮次以 max-tokens 结束；未完成的工具调用不会执行。单轮可续跑不等于上下文或运行时长没有上限。
 
 -----
 
@@ -103,7 +107,7 @@ const handle = await ctx.agents.create({
 | [`src/inbox.ts`](src/inbox.ts) | 包内部的 `ReactLoopInbox`：持久投影、结构化命令与仅供循环使用的领取状态 |
 | [`src/tool-calls.ts`](src/tool-calls.ts) | 工具调度：独占屏障与有界并行池 |
 | [`src/runtime-context.ts`](src/runtime-context.ts) | 每步骤 runtime-context 快照处理 |
-| [`src/constants.ts`](src/constants.ts) | `DEFAULT_MAX_PARALLEL_TOOL_CALLS` |
+| [`src/constants.ts`](src/constants.ts) | 工具与输出续跑的默认值 |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式配套：从会话日志重建请求 |
 
 ### 创建与拆除

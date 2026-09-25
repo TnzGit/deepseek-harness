@@ -20,6 +20,9 @@ export type PluginsSettingsLocaleKey =
   | 'longTaskMonitorTitle' | 'longTaskMonitorDescription' | 'longTaskMonitorEnabled'
   | 'longTaskMonitorStartAfter' | 'longTaskMonitorStartAfterHint'
   | 'longTaskMonitorReportEvery' | 'longTaskMonitorReportEveryHint'
+  | 'longTaskMonitorBashEnabled' | 'longTaskMonitorBashStartAfter'
+  | 'longTaskMonitorBashStartAfterHint' | 'longTaskMonitorBashReportEvery'
+  | 'longTaskMonitorBashReportEveryHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -76,12 +79,17 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   subagentModelSelectionConflict: 'Settings changed elsewhere. Discard your draft and try again.',
   subagentModelSelectionOff: 'Subagents use configured defaults or inherit the parent agent\'s model. Saved model choices are retained.',
   longTaskMonitorTitle: 'Long-task monitor',
-  longTaskMonitorDescription: 'Periodically asks long-running tasks to report progress.',
+  longTaskMonitorDescription: 'Monitors long conversations and explicit long-running foreground Bash calls.',
   longTaskMonitorEnabled: 'Enable progress checks',
   longTaskMonitorStartAfter: 'First check after (minutes)',
   longTaskMonitorStartAfterHint: 'The monitor stays quiet before this continuous runtime.',
   longTaskMonitorReportEvery: 'Report interval (minutes)',
   longTaskMonitorReportEveryHint: 'How often a running task is asked for a short progress update.',
+  longTaskMonitorBashEnabled: 'Watch long foreground Bash calls',
+  longTaskMonitorBashStartAfter: 'First Bash check after (minutes)',
+  longTaskMonitorBashStartAfterHint: 'Only explicit foreground timeoutMs values at or above this threshold are watched.',
+  longTaskMonitorBashReportEvery: 'Bash check interval (minutes)',
+  longTaskMonitorBashReportEveryHint: 'Records a server-side checkpoint without injecting stale prompts. Use run_in_background for live inspection.',
 }
 
 /** Simplified Chinese copy. */
@@ -139,10 +147,15 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   subagentModelSelectionConflict: '设置已在其他位置更新。请放弃修改后重试。',
   subagentModelSelectionOff: '关闭后，Subagent 使用配置的默认模型或继承父 Agent 的模型；已选模型会保留。',
   longTaskMonitorTitle: '长任务监控',
-  longTaskMonitorDescription: '定期要求长时间运行的任务汇报进度。',
+  longTaskMonitorDescription: '同时监控长对话和显式设置长超时的前台 Bash 命令。',
   longTaskMonitorEnabled: '启用进度检查',
   longTaskMonitorStartAfter: '首次检查等待（分钟）',
   longTaskMonitorStartAfterHint: '任务连续运行达到此时长前不发送进度提醒。',
   longTaskMonitorReportEvery: '汇报间隔（分钟）',
   longTaskMonitorReportEveryHint: '运行中的任务每隔多久收到一次简短进度汇报提醒。',
+  longTaskMonitorBashEnabled: '监控长时间前台 Bash',
+  longTaskMonitorBashStartAfter: '首次 Bash 检查等待（分钟）',
+  longTaskMonitorBashStartAfterHint: '只监控显式 timeoutMs 不小于此阈值的前台 Bash 调用。',
+  longTaskMonitorBashReportEvery: 'Bash 检查间隔（分钟）',
+  longTaskMonitorBashReportEveryHint: '只记录服务端检查点，不向命令结束后的上下文注入过期提示；需要实时查看请使用 run_in_background。',
 }

@@ -95,6 +95,10 @@ export interface Config {
    * omission defaults to {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}.
    */
   maxParallelToolCalls?: number
+  /** Maximum automatic output-limit continuations per turn; zero restores stop-on-limit behavior. */
+  maxOutputContinuations?: number
+  /** Maximum output tokens spent in a turn before automatic continuation stops. */
+  maxContinuedOutputTokens?: number
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -111,7 +115,7 @@ export interface Config {
 
 Depends on: [`AgentOptions`](subsystems/core.md) · [`SessionId`](subsystems/core.md)
 
-Source: [`packages/core/agent-loop/src/index.ts:318`](../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:337`](../packages/core/agent-loop/src/index.ts)
 
 <a id="deepseek-aidsh-agent-presets"></a>
 
@@ -359,6 +363,10 @@ export interface ConnectionConfig {
    * bind. An entry that is not a bare, canonical authority fails plugin load.
    */
   trustedHosts?: string[]
+  /** Allow trusted non-loopback authorities to use the configuration plane. */
+  allowRemoteAdmin?: boolean
+  /** Disable browser-session auth; intended only with explicit LAN opt-in. */
+  allowUnauthenticated?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -1462,6 +1470,25 @@ export type Config = Readonly<Record<string, never>>
 ```
 
 Source: [`packages/llm/llm-retry/src/index.ts:25`](../packages/llm/llm-retry/src/index.ts)
+
+<a id="deepseek-aidsh-long-task-monitor"></a>
+
+## `@deepseek-ai/dsh-long-task-monitor`
+
+Requires: `agents`
+
+```ts config-catalog
+export interface Config {
+  /** Do not steer before this continuous-running duration (default 15 minutes). */
+  startAfterMs?: number
+  /** Progress-check interval after the first check (default 10 minutes). */
+  reportEveryMs?: number
+  /** Restrict monitoring to root agents (default true, prevents subagent spam). */
+  rootOnly?: boolean
+}
+```
+
+Source: [`packages/core/long-task-monitor/src/index.ts:25`](../packages/core/long-task-monitor/src/index.ts)
 
 <a id="deepseek-aidsh-lsp-stdio"></a>
 
@@ -3281,6 +3308,10 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Whether this launch explicitly permits trusted LAN clients to use remote admin APIs. */
+  allowRemoteAdmin?: boolean
+  /** Whether this launch explicitly disables browser-session authentication. */
+  allowUnauthenticated?: boolean
 }
 ```
 

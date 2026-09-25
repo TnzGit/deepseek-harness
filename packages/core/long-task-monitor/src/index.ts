@@ -1,9 +1,11 @@
 /**
- * Periodic, non-cancelling progress checks for long-running root-agent turns.
+ * Periodic, non-cancelling progress checks for long-running root-agent turns
+ * and explicitly long-timeout foreground Bash calls.
  *
- * The monitor deliberately steers at a step boundary instead of appending a
- * concurrent user message or aborting a tool. It therefore works for every
- * mode that mounts dsh-base while preserving the active tool's lifecycle.
+ * Conversation checks steer at a step boundary instead of appending a
+ * concurrent user message or aborting a tool. Foreground Bash checks are
+ * deliberately log-only: a synchronous Bash call cannot consume a steer until
+ * it settles, so queueing one would create stale context after completion.
  * @module @deepseek-ai/dsh-long-task-monitor
  */
 
@@ -12,6 +14,8 @@ import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
+// Type-only: pulls the tools/execute event contract into this plugin.
+import type {} from '@deepseek-ai/dsh-tools'
 
 export const name = 'long-task-monitor'
 export const inject = ['agents']
@@ -43,12 +47,21 @@ export interface LongTaskMonitorSettings {
   startAfterMinutes: number
   /** Interval between progress checks, in minutes. */
   reportEveryMinutes: number
+  /** Whether to watch foreground Bash calls with an explicit long timeout. */
+  bashEnabled: boolean
+  /** Do not queue a Bash check before this many minutes have elapsed. */
+  bashStartAfterMinutes: number
+  /** Interval between checks for one foreground Bash call. */
+  bashReportEveryMinutes: number
 }
 
 export const LONG_TASK_MONITOR_SETTINGS_SCHEMA: z<LongTaskMonitorSettings> = z.object({
   enabled: z.boolean().default(true),
   startAfterMinutes: z.number().step(1).min(1).default(15),
   reportEveryMinutes: z.number().step(1).min(1).default(10),
+  bashEnabled: z.boolean().default(true),
+  bashStartAfterMinutes: z.number().step(1).min(1).default(15),
+  bashReportEveryMinutes: z.number().step(1).min(1).default(10),
 })
 
 function minutes(ms: number): string {
@@ -66,6 +79,72 @@ function notice(text: string) {
       summary: text,
     },
   })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+interface BashArguments {
+  command?: unknown
+  timeoutMs?: unknown
+  run_in_background?: unknown
+}
+
+/**
+ * Foreground Bash has a deliberately synchronous tool contract: the model
+ * cannot receive a new step until the call settles. The watchdog therefore
+ * records throttled server-side checkpoints only; it never queues stale
+ * steering messages that would arrive in a burst after the command returns.
+ * Truly interactive checks require the model to use `run_in_background`, whose
+ * job lifecycle is observable while the agent continues.
+ */
+function startBashWatch(
+  ctx: Context,
+  agent: Agent,
+  args: BashArguments,
+  config: () => LongTaskMonitorSettings,
+  rootOnly: boolean,
+): (() => void) | undefined {
+  if (rootOnly && !ctx.agents.roots().includes(agent)) return undefined
+  if (args.run_in_background === true) return undefined
+  if (typeof args.timeoutMs !== 'number' || !Number.isFinite(args.timeoutMs)) return undefined
+  const initial = config()
+  if (!initial.bashEnabled) return undefined
+  const startAfterMs = Math.max(1, initial.bashStartAfterMinutes) * 60_000
+  if (args.timeoutMs < startAfterMs) return undefined
+  const startedAt = Date.now()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let stopped = false
+
+  const clear = (): void => {
+    stopped = true
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
+  }
+  const schedule = (delayMs: number): void => {
+    if (stopped) return
+    timer = setTimeout(() => {
+      timer = undefined
+      tick()
+    }, Math.min(Math.max(1, delayMs), MAX_TIMER_DELAY_MS))
+  }
+  const tick = (): void => {
+    if (stopped || agent.status !== 'running') return
+    const current = config()
+    if (!current.bashEnabled) return
+    const elapsed = Date.now() - startedAt
+    const intervalMs = Math.max(1, current.bashReportEveryMinutes) * 60_000
+    ctx.logger.info(
+      `long-task-monitor: foreground Bash crossed a ${minutes(elapsed)} watchdog checkpoint `
+      + `(configured timeout ${minutes(args.timeoutMs as number)}); no agent steer was queued `
+      + 'because foreground Bash is synchronous; use run_in_background + job_output for live inspection',
+    )
+    schedule(intervalMs)
+  }
+
+  schedule(startAfterMs)
+  return clear
 }
 
 class LongTaskRuntime {
@@ -179,6 +258,9 @@ export function apply(ctx: Context, config: Config): void {
     enabled: true,
     startAfterMinutes: Math.max(1, Math.round((config.startAfterMs ?? 15 * 60 * 1000) / 60_000)),
     reportEveryMinutes: Math.max(1, Math.round((config.reportEveryMs ?? 10 * 60 * 1000) / 60_000)),
+    bashEnabled: true,
+    bashStartAfterMinutes: 15,
+    bashReportEveryMinutes: 10,
   }
   let source: () => LongTaskMonitorSettings = () => composition
   const runtimes = new Map<Agent, () => void>()
@@ -188,6 +270,21 @@ export function apply(ctx: Context, config: Config): void {
       setSource: (current) => { source = current },
       onChange: () => { for (const runtime of runtimeObjects.values()) runtime.refresh() },
     })
+  })
+  // A foreground Bash call occupies the current agent step until it settles.
+  // Its watchdog is deliberately log-only; background jobs remain the
+  // supported path for genuinely concurrent observation.
+  ctx.on('tools/execute', async (exec, next) => {
+    if (exec.agent === undefined || exec.name !== 'bash' || !isRecord(exec.arguments)) {
+      return next()
+    }
+    const args = exec.arguments as BashArguments
+    const stopWatch = startBashWatch(ctx, exec.agent, args, source, rootOnly)
+    try {
+      return await next()
+    } finally {
+      stopWatch?.()
+    }
   })
   const stopCreated = ctx.on('agent/created', ({ agent }) => {
     if (rootOnly && !ctx.agents.roots().includes(agent)) return

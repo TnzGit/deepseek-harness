@@ -33,7 +33,11 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { ReactLoopAgent } from './agent.ts'
-import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
+import {
+  DEFAULT_MAX_CONTINUED_OUTPUT_TOKENS,
+  DEFAULT_MAX_OUTPUT_CONTINUATIONS,
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+} from './constants.ts'
 
 /** Fiber states that cannot own or serve a new lifecycle. */
 const INACTIVE_STATES: ReadonlySet<FiberState> = new Set([
@@ -195,6 +199,15 @@ function resolveMaxParallelToolCalls(value: number | undefined): number {
   return maxParallelToolCalls
 }
 
+/** Validate an automatic-continuation limit before it is read by a running turn. */
+function resolveContinuationLimit(value: number | undefined, fallback: number, name: string, minimum: number): number {
+  const resolved = value ?? fallback
+  if (!Number.isSafeInteger(resolved) || resolved < minimum) {
+    throw new Error(`${name} must be a safe integer >= ${minimum}`)
+  }
+  return resolved
+}
+
 /** Reject an output-token cap that cannot be represented exactly on the request wire. */
 function assertAgentOptions(options: AgentOptions): void {
   if (options.maxTokens !== undefined
@@ -307,11 +320,17 @@ export const AGENT_LOOP_SETTINGS_NAMESPACE = 'agent-loop'
 export interface AgentLoopSettings {
   /** Maximum parallel-safe calls in flight per agent step. */
   maxParallelToolCalls: number
+  /** Maximum automatic requests after output-limited responses in one turn; zero disables continuation. */
+  maxOutputContinuations: number
+  /** Maximum output tokens reported in one turn before automatic continuation stops. */
+  maxContinuedOutputTokens: number
 }
 
 /** Schema of the agent-loop settings section. */
 export const AGENT_LOOP_SETTINGS_SCHEMA: z<AgentLoopSettings> = z.object({
   maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS),
+  maxOutputContinuations: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_OUTPUT_CONTINUATIONS),
+  maxContinuedOutputTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_CONTINUED_OUTPUT_TOKENS),
 })
 
 /** Agent-loop plugin configuration. */
@@ -321,6 +340,10 @@ export interface Config {
    * omission defaults to {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}.
    */
   maxParallelToolCalls?: number
+  /** Maximum automatic output-limit continuations per turn; zero restores stop-on-limit behavior. */
+  maxOutputContinuations?: number
+  /** Maximum output tokens spent in a turn before automatic continuation stops. */
+  maxContinuedOutputTokens?: number
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -335,7 +358,7 @@ export interface Config {
 }
 
 /** Agent-loop configuration after defaults and load-time validation. */
-type ResolvedConfig = Config & { maxParallelToolCalls: number }
+type ResolvedConfig = Config & AgentLoopSettings
 
 /** Reject self-contained identity conflicts before any configured agent starts. */
 function validateConfiguredAgents(agents: Config['agents']): void {
@@ -362,6 +385,8 @@ export class AgentLoop extends Service implements AgentFactory {
   /** Runtime schema for declarative agents. */
   static Config = z.object({
     maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS),
+    maxOutputContinuations: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_OUTPUT_CONTINUATIONS),
+    maxContinuedOutputTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_CONTINUED_OUTPUT_TOKENS),
     agents: z.array(z.object({
       id: z.string().required(),
       sessionId: z.string().min(1),
@@ -385,6 +410,12 @@ export class AgentLoop extends Service implements AgentFactory {
 
     const entry: AgentLoopSettings = {
       maxParallelToolCalls: resolveMaxParallelToolCalls(config.maxParallelToolCalls),
+      maxOutputContinuations: resolveContinuationLimit(
+        config.maxOutputContinuations, DEFAULT_MAX_OUTPUT_CONTINUATIONS, 'maxOutputContinuations', 0,
+      ),
+      maxContinuedOutputTokens: resolveContinuationLimit(
+        config.maxContinuedOutputTokens, DEFAULT_MAX_CONTINUED_OUTPUT_TOKENS, 'maxContinuedOutputTokens', 1,
+      ),
     }
     let source: () => AgentLoopSettings = () => entry
     this.config = {
@@ -396,13 +427,23 @@ export class AgentLoop extends Service implements AgentFactory {
       get maxParallelToolCalls() {
         return source().maxParallelToolCalls
       },
+      get maxOutputContinuations() {
+        return source().maxOutputContinuations
+      },
+      get maxContinuedOutputTokens() {
+        return source().maxContinuedOutputTokens
+      },
     }
     ctx.inject(['settings'], (settingsCtx) => {
       settingsCtx.settings.installSection(ctx, AGENT_LOOP_SETTINGS_NAMESPACE, AGENT_LOOP_SETTINGS_SCHEMA, entry, {
         // The schema admits any integer above zero; `resolveMaxParallelToolCalls`
         // owns the whole rule, so refusing here keeps the running scheduler on
         // its last good cap instead of failing at the next tool group.
-        validate: value => void resolveMaxParallelToolCalls(value.maxParallelToolCalls),
+        validate: (value) => {
+          resolveMaxParallelToolCalls(value.maxParallelToolCalls)
+          resolveContinuationLimit(value.maxOutputContinuations, DEFAULT_MAX_OUTPUT_CONTINUATIONS, 'maxOutputContinuations', 0)
+          resolveContinuationLimit(value.maxContinuedOutputTokens, DEFAULT_MAX_CONTINUED_OUTPUT_TOKENS, 'maxContinuedOutputTokens', 1)
+        },
         setSource: (current) => {
           source = current
         },

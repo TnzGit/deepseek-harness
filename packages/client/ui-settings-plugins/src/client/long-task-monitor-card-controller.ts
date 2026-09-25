@@ -10,12 +10,18 @@ export interface LongTaskMonitorSettings {
   enabled?: boolean
   startAfterMinutes?: number
   reportEveryMinutes?: number
+  bashEnabled?: boolean
+  bashStartAfterMinutes?: number
+  bashReportEveryMinutes?: number
 }
 
 export interface LongTaskMonitorCardState extends CardShell {
   enabled: CardFieldState
   startAfterMinutes: CardFieldState
   reportEveryMinutes: CardFieldState
+  bashEnabled: CardFieldState
+  bashStartAfterMinutes: CardFieldState
+  bashReportEveryMinutes: CardFieldState
 }
 
 export interface LongTaskMonitorCardFace extends CardActions {
@@ -32,6 +38,9 @@ export class LongTaskMonitorCardController {
       booleanField('enabled'),
       numberField('startAfterMinutes'),
       numberField('reportEveryMinutes'),
+      booleanField('bashEnabled'),
+      numberField('bashStartAfterMinutes'),
+      numberField('bashReportEveryMinutes'),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -42,6 +51,9 @@ export class LongTaskMonitorCardController {
       enabled: this.form.field('enabled'),
       startAfterMinutes: this.form.field('startAfterMinutes'),
       reportEveryMinutes: this.form.field('reportEveryMinutes'),
+      bashEnabled: this.form.field('bashEnabled'),
+      bashStartAfterMinutes: this.form.field('bashStartAfterMinutes'),
+      bashReportEveryMinutes: this.form.field('bashReportEveryMinutes'),
     }
   }
 

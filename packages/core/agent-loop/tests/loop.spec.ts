@@ -15,7 +15,12 @@ function driverDone(agent: Agent): Promise<void> {
   return (agent as Agent & { done: Promise<void> }).done
 }
 
-async function harness(adapter: MockAdapter, persona = '') {
+async function harness(
+  adapter: MockAdapter,
+  persona = '',
+  maxOutputContinuations = 0,
+  maxContinuedOutputTokens = 524_288,
+) {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -23,7 +28,7 @@ async function harness(adapter: MockAdapter, persona = '') {
   await ctx.plugin(SystemPrompt, { personaPrefix: persona })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: [], maxOutputContinuations, maxContinuedOutputTokens })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }
@@ -1307,7 +1312,76 @@ describe('agent loop', () => {
     expect(turnEnd!.data.reason).toEqual({ kind: 'max-tokens' })
   })
 
-  it('a max-tokens step earlier in a turn still surfaces as max-tokens after a later completed step', async () => {
+  it('continues a reasoning-only output limit in the same turn with the original effort and replayed checkpoint', async () => {
+    const effort = ReasoningEffortId('xhigh')
+    const adapter = new MockAdapter([[
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: 'First inspect the target structure.' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'First inspect the target structure.' } },
+      { type: 'usage', usage: { inputTokens: 10, outputTokens: 32_768 } },
+      { type: 'finish', reason: { kind: 'max-tokens' } },
+    ], textResponse('Done.')], { efforts: [{ id: effort, name: 'XHigh' }] })
+    const ctx = await harness(adapter, '', 16)
+    const agent = await ctx.agentLoop.create(SessionId('reasoning-continuation'), {
+      provider: 'mock', model: 'mock', reasoningEffort: effort,
+    })
+
+    send(agent, 'Complete the task')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests.map(request => request.reasoningEffort)).toEqual([effort, effort])
+    const checkpoint = adapter.requests[1]?.messages.find(message => message.role === 'assistant')
+    expect(checkpoint?.content).toEqual([{ type: 'reasoning', text: 'First inspect the target structure.' }])
+    const continuation = adapter.requests[1]?.messages.find(message => message.source.kind === 'plugin'
+      && message.source.plugin === 'agent-loop')
+    expect(continuation?.role).toBe('user')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'step/start')).toHaveLength(2)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
+  it('stops automatic continuation when successive output-limited segments repeat', async () => {
+    const adapter = new MockAdapter([maxTokensResponse('same reasoning'), maxTokensResponse('same reasoning')])
+    const ctx = await harness(adapter, '', 16)
+    const agent = await ctx.agentLoop.create(SessionId('repeated-continuation'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens' } } })
+  })
+
+  it('stops after the configured number of automatic continuations', async () => {
+    const adapter = new MockAdapter([maxTokensResponse('first'), maxTokensResponse('second')])
+    const ctx = await harness(adapter, '', 1)
+    const agent = await ctx.agentLoop.create(SessionId('bounded-continuation'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens' } } })
+  })
+
+  it('stops when cumulative output reaches the configured turn budget', async () => {
+    const adapter = new MockAdapter([maxTokensResponse('first'), maxTokensResponse('second')])
+    const ctx = await harness(adapter, '', 16, 10)
+    const agent = await ctx.agentLoop.create(SessionId('output-budget-continuation'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens' } } })
+  })
+
+  it('a completed continuation closes the turn successfully after an earlier output-limited step', async () => {
     // Step 1 is cut off (max-tokens, no tool calls → would stop by default), so continuation
     // must be FORCED to reach step 2 which finishes normally (stop).
     const adapter = new MockAdapter([
@@ -1355,9 +1429,7 @@ describe('agent loop', () => {
         source: { kind: 'plugin', plugin: 'max-tokens-test' },
       },
     ])
-    // A max-token step is sticky: the later completed step must not
-    // downgrade the turn outcome.
-    expect(reasons).toEqual([{ kind: 'max-tokens' }])
+    expect(reasons).toEqual([{ kind: 'completed' }])
   })
 
   it('a completed step after no max-tokens keeps the turn completed (max-tokens does not leak across turns)', async () => {

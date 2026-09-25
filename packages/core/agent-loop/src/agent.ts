@@ -16,10 +16,11 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
-import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage, GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
   LlmError,
   createAssistantMessage,
+  createUserMessage,
   errorChain,
   markAgentLoopRequest,
 } from '@deepseek-ai/dsh-llm'
@@ -48,7 +49,22 @@ type Phase =
   }
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
-type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
+type StepResult =
+  | { kind: 'completed' | 'continue'; outputTokens: number }
+  | { kind: 'max-tokens'; outputTokens: number; message: AssistantMessage }
+
+const CONTINUATION_PROMPT = 'The previous model response reached its per-request output limit. Continue the same unfinished task using the preceding reasoning and output as your checkpoint. Do not restart or repeat completed analysis; take the next concrete action or finish the answer when ready.'
+
+/** Detect an empty or mechanically repeated segment without treating long novel reasoning as a loop. */
+function continuationFingerprint(message: AssistantMessage): string | null {
+  const content = message.content
+    .flatMap(block => block.type === 'text' || block.type === 'reasoning' ? [block.text] : [])
+    .join(' ').replace(/\s+/gu, ' ').trim()
+  if (content.length === 0) return null
+  const tail = content.slice(-2048)
+  if (tail.length >= 512 && tail.slice(-256).repeat(3) === tail.slice(-768)) return null
+  return tail
+}
 
 type PreparedStep =
   | { kind: 'reject' }
@@ -282,6 +298,9 @@ export class ReactLoopAgent implements Agent {
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
+    let outputContinuations = 0
+    let turnOutputTokens = 0
+    let previousFingerprint: string | null = null
     try {
       while (true) {
         signal.throwIfAborted()
@@ -302,12 +321,29 @@ export class ReactLoopAgent implements Agent {
         this.session.append('step/start', { turn, step })
         phase.step = step
         try {
-          // max-tokens is sticky: once any step hits the ceiling, later steps
-          // that complete normally must not downgrade the turn outcome.
-          const stepEnd = await this.step(decision)
-          // max-tokens stays sticky: a later completed step must not
-          // downgrade the turn outcome.
-          if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
+          const result = await this.step(decision)
+          turnOutputTokens += result.outputTokens
+          if (result.kind === 'max-tokens') {
+            const fingerprint = continuationFingerprint(result.message)
+            const { maxOutputContinuations, maxContinuedOutputTokens } = this.loopCtx.agentLoop.config
+            if (fingerprint !== null
+              && fingerprint !== previousFingerprint
+              && outputContinuations < maxOutputContinuations
+              && turnOutputTokens < maxContinuedOutputTokens) {
+              previousFingerprint = fingerprint
+              outputContinuations += 1
+              this.inbox.prepend('next-step', createUserMessage({
+                content: [{ type: 'text', text: CONTINUATION_PROMPT }],
+                source: { kind: 'plugin', plugin: 'agent-loop' },
+              }))
+              turnEnds = null
+            } else {
+              turnEnds = { kind: 'max-tokens' }
+            }
+          } else {
+            previousFingerprint = null
+            turnEnds = result.kind === 'completed' ? { kind: 'completed' } : null
+          }
         } finally {
           this.session.append('step/end', { turn, step })
         }
@@ -349,7 +385,7 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
-  private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
+  private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepResult> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
     const { turn, step, abort: { signal } } = this.phase
@@ -481,15 +517,18 @@ export class ReactLoopAgent implements Agent {
             stream: live.stream,
           }, { surfaceOp: 'append' }).seq,
         )
-        if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
+        if (finish.kind === 'max-tokens') return {
+          kind: 'max-tokens', message,
+          outputTokens: live.usage?.outputTokens ?? request.maxTokens ?? 0,
+        }
 
         const toolCalls = message.content.filter(block => block.type === 'tool-call')
-        if (toolCalls.length === 0) return { kind: 'completed' }
+        if (toolCalls.length === 0) return { kind: 'completed', outputTokens: live.usage?.outputTokens ?? 0 }
         const { concluded } = await executeToolCalls(
           this.loopCtx, turn, step, toolCalls, signal,
           context => this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context]),
         )
-        return concluded ? { kind: 'completed' } : null
+        return { kind: concluded ? 'completed' : 'continue', outputTokens: live.usage?.outputTokens ?? 0 }
       } catch (error: unknown) {
         if (!live.ended) live.abandon()
         throw error

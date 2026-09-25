@@ -67,12 +67,40 @@ describe('agent-loop settings section', () => {
     await bench.ctx.fiber.dispose()
   })
 
+  it('updates automatic output-continuation limits without remounting the agent loop', async () => {
+    const bench = await boot()
+    expect(bench.ctx.agentLoop.config.maxOutputContinuations).toBe(16)
+
+    await bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, {
+      maxOutputContinuations: 3,
+      maxContinuedOutputTokens: 98_304,
+    })
+
+    expect(bench.ctx.agentLoop.config.maxOutputContinuations).toBe(3)
+    expect(bench.ctx.agentLoop.config.maxContinuedOutputTokens).toBe(98_304)
+    await bench.ctx.fiber.dispose()
+  })
+
+  it('rejects unsafe continuation budgets at the settings boundary', async () => {
+    const bench = await boot()
+
+    await expect(bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, { maxOutputContinuations: -1 }))
+      .rejects.toThrow()
+    await expect(bench.ctx.settings.update(AGENT_LOOP_SETTINGS_NAMESPACE, { maxContinuedOutputTokens: 0 }))
+      .rejects.toThrow()
+
+    expect(bench.ctx.agentLoop.config.maxOutputContinuations).toBe(16)
+    await bench.ctx.fiber.dispose()
+  })
+
   it('never offers the composed agents array to the settings document', async () => {
     const bench = await boot()
 
     const descriptor = bench.ctx.settings.describe().find(row => String(row.ns) === 'agent-loop')
 
-    expect(Object.keys(descriptor?.value as object)).toEqual(['maxParallelToolCalls'])
+    expect(Object.keys(descriptor?.value as object)).toEqual([
+      'maxParallelToolCalls', 'maxOutputContinuations', 'maxContinuedOutputTokens',
+    ])
     await bench.ctx.fiber.dispose()
   })
 

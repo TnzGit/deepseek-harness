@@ -10,6 +10,7 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../core/agent" },
+    { "path": "../../core/tools" },
     { "path": "../../llm/llm" },
     { "path": "../../settings/settings" }
   ]
