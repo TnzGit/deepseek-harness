@@ -10,12 +10,14 @@ import {
 export interface SubagentLimitsSettings {
   maxDepth: number
   maxActiveSubagents: number
+  maxConcurrentRuns: number
 }
 
 /** Effective values and drafts presented by the limits card. */
 export interface SubagentLimitsCardState extends SettingsFormShell {
   maxDepth: SettingsFieldState
   maxActiveSubagents: SettingsFieldState
+  maxConcurrentRuns: SettingsFieldState
 }
 
 /** Actions and observable state bound by the slot renderer. */
@@ -38,18 +40,23 @@ function limitField(field: keyof SubagentLimitsSettings, minimum: number): Setti
   }
 }
 
-/** Bind two independently resettable limits to one staged settings form. */
+/** Bind independently resettable depth, residency, and execution limits to one staged settings form. */
 export class SubagentLimitsCardController {
   private readonly form: SettingsFormModel<SubagentLimitsSettings>
   private readonly store: SnapshotStore<SubagentLimitsCardState>
 
   /** @param scope - The Host's `subagent` settings section. */
   constructor(scope: SettingsFormScope<SubagentLimitsSettings>) {
-    this.form = new SettingsFormModel(scope, [limitField('maxDepth', 0), limitField('maxActiveSubagents', 1)])
+    this.form = new SettingsFormModel(scope, [
+      limitField('maxDepth', 0),
+      limitField('maxActiveSubagents', 1),
+      limitField('maxConcurrentRuns', 1),
+    ])
     this.store = this.form.bind(() => ({
       ...this.form.shell(),
       maxDepth: this.form.field('maxDepth'),
       maxActiveSubagents: this.form.field('maxActiveSubagents'),
+      maxConcurrentRuns: this.form.field('maxConcurrentRuns'),
     }))
   }
 

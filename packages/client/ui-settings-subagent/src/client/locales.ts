@@ -12,8 +12,10 @@ export type SubagentSettingsLocaleKey =
   | 'subagentDepthZero' | 'subagentDepthOne' | 'subagentDepthOverride'
   | 'subagentMaxActive'
   | 'subagentCapacityHelpLabel' | 'subagentCapacityHelp'
+  | 'subagentMaxConcurrent'
+  | 'subagentConcurrentHelpLabel' | 'subagentConcurrentHelp'
   | 'subagentDepthInvalid'
-  | 'subagentCapacityInvalid'
+  | 'subagentCapacityInvalid' | 'subagentConcurrentInvalid'
   | 'subagentModelSelectionTitle'
   | 'subagentModelSelectionToggle' | 'subagentModelSelectionChoose' | 'subagentModelSelectionAllowed'
   | 'subagentModelSelectionLoading' | 'subagentModelSelectionLoadFailed' | 'subagentModelSelectionRetry'
@@ -31,7 +33,7 @@ export const en: Record<SubagentSettingsLocaleKey, string> = {
   saving: 'Saving…',
   saveFailed: 'The deployment did not accept these values; they were left for you to correct.',
   subagentTitle: 'Subagent',
-  subagentDescription: 'Set Subagent recursion depth, count, and models.',
+  subagentDescription: 'Set Subagent recursion depth, continuable residency, one-shot concurrency, and models.',
   subagentLimitsTitle: 'Limits',
   subagentMaxDepth: 'Maximum recursion depth',
   subagentDepthHelpLabel: 'About maximum recursion depth',
@@ -39,11 +41,15 @@ export const en: Record<SubagentSettingsLocaleKey, string> = {
   subagentDepthZero: 'Disable Subagents',
   subagentDepthOne: 'Only the main Agent can create Subagents',
   subagentDepthOverride: 'If a tool defines its own maximum recursion depth, that setting takes precedence.',
-  subagentMaxActive: 'Subagent parallelism limit',
-  subagentCapacityHelpLabel: 'About the Subagent parallelism limit',
-  subagentCapacityHelp: 'Total live Subagents under the same main Agent, across all recursion levels. The main Agent is excluded. New start requests are rejected when the limit is reached.',
+  subagentMaxActive: 'Continuable Subagent live limit',
+  subagentCapacityHelpLabel: 'About the continuable Subagent live limit',
+  subagentCapacityHelp: 'Maximum live continuable Subagents sharing one activation pool. Existing children keep their slots; new or cold-resumed continuable children are rejected while the pool is full.',
+  subagentMaxConcurrent: 'One-shot concurrent run limit',
+  subagentConcurrentHelpLabel: 'About the one-shot concurrent run limit',
+  subagentConcurrentHelp: 'Maximum one-shot Subagent runs executing at the same time across providers. Additional starts wait in FIFO order. Set this to 1 on a single local inference engine when parallel contexts cause KV-cache contention.',
   subagentDepthInvalid: 'Enter a whole number of 0 or more.',
   subagentCapacityInvalid: 'Enter a whole number of 1 or more.',
+  subagentConcurrentInvalid: 'Enter a whole number of 1 or more.',
   subagentModelSelectionTitle: 'Model selection',
   subagentModelSelectionToggle: 'Allow agents to choose models for Subagents',
   subagentModelSelectionChoose: 'When enabled, agents can choose a provider, model, and reasoning effort for each Subagent from the authorized models below. Applies only to new sessions.',
@@ -70,7 +76,7 @@ export const zh: Record<SubagentSettingsLocaleKey, string> = {
   saving: '保存中…',
   saveFailed: '本部署没有接受这些值，已保留供你修改。',
   subagentTitle: '子智能体',
-  subagentDescription: '设置子智能体的递归层级、数量和模型。',
+  subagentDescription: '设置子智能体的递归层级、可续接驻留数量、一次性运行并发和模型。',
   subagentLimitsTitle: '运行限制',
   subagentMaxDepth: '最大递归深度',
   subagentDepthHelpLabel: '最大递归深度说明',
@@ -78,11 +84,15 @@ export const zh: Record<SubagentSettingsLocaleKey, string> = {
   subagentDepthZero: '禁用子智能体',
   subagentDepthOne: '仅允许主 Agent 创建子智能体',
   subagentDepthOverride: '如果某个工具单独设置了最大递归深度，以该工具的设置为准。',
-  subagentMaxActive: '子智能体并行数量上限',
-  subagentCapacityHelpLabel: '子智能体并行数量上限说明',
-  subagentCapacityHelp: '同一主 Agent 下，所有递归层级同时存活的子智能体总数，主 Agent 不计入。达到上限时，新的启动请求会被拒绝。',
+  subagentMaxActive: '可续接子智能体驻留上限',
+  subagentCapacityHelpLabel: '可续接子智能体驻留上限说明',
+  subagentCapacityHelp: '限制同一 activation pool 中同时存活的可续接子智能体数量。已有子智能体继续占用名额；池已满时，新的创建或冷恢复会被拒绝。',
+  subagentMaxConcurrent: '一次性子智能体并发运行上限',
+  subagentConcurrentHelpLabel: '一次性子智能体并发运行上限说明',
+  subagentConcurrentHelp: '限制所有 provider 同时执行的一次性子智能体数量，超出的启动请求按 FIFO 排队。单个本地推理引擎在并行上下文导致 KV 缓存争用时，可将此值设为 1。',
   subagentDepthInvalid: '请输入不小于 0 的整数。',
   subagentCapacityInvalid: '请输入不小于 1 的整数。',
+  subagentConcurrentInvalid: '请输入不小于 1 的整数。',
   subagentModelSelectionTitle: '模型选择',
   subagentModelSelectionToggle: '允许 Agent 为子智能体选择模型',
   subagentModelSelectionChoose: '开启后，Agent 可以从下方授权模型中，为每个子智能体选择提供方、模型和推理强度。仅影响新会话。',
