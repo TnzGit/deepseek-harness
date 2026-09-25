@@ -354,6 +354,7 @@ export class PiAiAdapter extends LlmAdapter {
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
     const streamFirstChunkTimeoutMs = profile.streamFirstChunkTimeoutMs
     using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+    let receivedProviderChunk = false
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
@@ -390,7 +391,6 @@ export class PiAiAdapter extends LlmAdapter {
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
       let exhausted = false
-      let receivedProviderChunk = false
       try {
         while (true) {
           const result = await watchdog.next(
@@ -419,7 +419,7 @@ export class PiAiAdapter extends LlmAdapter {
     } catch (error: unknown) {
       const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
       if (timeout !== undefined) {
-        const phase = timeout.timeoutMs === streamFirstChunkTimeoutMs ? 'first chunk' : 'stream idle'
+        const phase = receivedProviderChunk ? 'stream idle' : 'first chunk'
         throw new LlmError(`pi-ai ${phase} timeout after ${timeout.timeoutMs}ms`, 'TIMEOUT', { cause: error })
       }
       if (options.signal?.aborted) {
