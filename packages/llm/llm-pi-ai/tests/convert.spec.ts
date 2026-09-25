@@ -980,6 +980,54 @@ describe('mapStopReason / mapUsage', () => {
   })
 })
 
+describe('pi-ai tool-call identity', () => {
+  it('rejects one non-empty id reused by a different content index before the second start', async () => {
+    const first = assistant({
+      content: [{ type: 'toolCall', id: 'dup', name: 'one', arguments: {} }],
+      stopReason: 'toolUse',
+    })
+    const second = assistant({
+      content: [
+        { type: 'toolCall', id: 'first', name: 'one', arguments: {} },
+        { type: 'toolCall', id: 'dup', name: 'two', arguments: {} },
+      ],
+      stopReason: 'toolUse',
+    })
+    const emitted: StreamChunk[] = []
+    let failure: unknown
+    try {
+      for await (const chunk of toStreamChunks(feed(
+        { type: 'toolcall_start', contentIndex: 0, partial: first },
+        { type: 'toolcall_start', contentIndex: 1, partial: second },
+      ))) emitted.push(chunk)
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toMatchObject({ code: 'DUPLICATE_TOOL_CALL_ID' })
+    expect(emitted).toEqual([{ type: 'block-start', index: 0, blockType: 'tool-call' }])
+  })
+
+  it('allows one tool call to repeat its own id through start and end', async () => {
+    const toolCall = { type: 'toolCall' as const, id: 'same', name: 'f', arguments: { a: 1 } }
+    const partial = assistant({ content: [toolCall], stopReason: 'toolUse' })
+    const result = await collect(toStreamChunks(feed(
+      { type: 'toolcall_start', contentIndex: 0, partial },
+      { type: 'toolcall_delta', contentIndex: 0, delta: '{"a":1}', partial },
+      { type: 'toolcall_end', contentIndex: 0, toolCall, partial },
+      { type: 'done', reason: 'toolUse', message: partial },
+    )))
+
+    expect(result.filter(chunk => chunk.type === 'block-start')).toHaveLength(1)
+    expect(result.find(chunk => chunk.type === 'block-end')).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: { type: 'tool-call', id: 'same', name: 'f', arguments: '{"a":1}' },
+    })
+    expect(result.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+})
+
 describe('toStreamChunks edge branches', () => {
   it('omits the name field for tool calls whose partial carried an empty name', async () => {
     const blank = assistant({ content: [{ type: 'toolCall', id: 'x', name: '', arguments: {} }] })

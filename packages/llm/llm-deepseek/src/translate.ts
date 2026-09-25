@@ -103,6 +103,7 @@ function stopReason(raw: unknown): FinishReason {
  */
 export async function* translate(events: AsyncIterable<Record<string, unknown>>, model: string): AsyncGenerator<StreamChunk> {
   const blocks = new Map<number, Block>()
+  const toolIndexesById = new Map<string, number>()
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
   let started = false
   let reason: FinishReason | undefined
@@ -122,6 +123,17 @@ export async function* translate(events: AsyncIterable<Record<string, unknown>>,
       const wireIndex = indexOf(event)
       if (blocks.has(wireIndex) || reason !== undefined) return malformed('block starts after settlement or repeats an index')
       const block = startBlock(event, blocks.size)
+      if (block.content.type === 'tool-call') {
+        const id = block.content.id
+        const existingIndex = toolIndexesById.get(id)
+        if (existingIndex !== undefined && existingIndex !== wireIndex) {
+          throw new LlmError(
+            `provider reused tool call id "${id}" for block indexes ${existingIndex} and ${wireIndex}`,
+            'DUPLICATE_TOOL_CALL_ID',
+          )
+        }
+        toolIndexesById.set(id, wireIndex)
+      }
       blocks.set(wireIndex, block)
       yield { type: 'block-start', index: block.index, blockType: block.content.type }
       if (block.content.type === 'text' || block.content.type === 'reasoning') {
