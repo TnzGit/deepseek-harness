@@ -34,10 +34,7 @@ jobs:
           packages/client/ui-settings-subagent/tests/controllers.client.spec.ts
           packages/client/ui-settings-subagent/tests/card.client.spec.tsx
       - name: Verify generated config catalog
-        run: |
-          pnpm run gen-config-catalog
-          git diff -- docs/config-catalog.md docs/config-catalog.zh.md
-          git diff --exit-code -- docs/config-catalog.md docs/config-catalog.zh.md
+        run: pnpm run verify-config-catalog
       - name: Verify Cordis configurations
         run: pnpm run verify-cordis-config
       - name: Typecheck
