@@ -168,7 +168,7 @@ describe('web e2e: plugin configuration pages', () => {
     expect(await capacityRules.getByText('限制同一 activation pool 中同时存活的可续接子智能体数量。已有子智能体继续占用名额；池已满时，新的创建或冷恢复会被拒绝。', { exact: true }).count()).toBe(1)
     await panel.getByRole('button', { name: '一次性子智能体并发运行上限说明', exact: true }).click()
     const concurrentRules = panel.getByRole('region', { name: '一次性子智能体并发运行上限说明', exact: true })
-    expect(await concurrentRules.getByText('限制所有 provider 同时执行的一次性子智能体数量，超出的启动请求按 FIFO 排队。单个本地推理引擎在并行上下文导致 KV 缓存争用时，可将此值设为 1。', { exact: true }).count()).toBe(1)
+    expect(await concurrentRules.getByText('限制所有 provider 同时执行的一次性子智能体数量。根 Agent 的超额启动请求按 FIFO 排队；嵌套子智能体在容量已满时立即失败，避免父子互相等待造成死锁。单个本地推理引擎在并行上下文导致 KV 缓存争用时，可将此值设为 1。', { exact: true }).count()).toBe(1)
     await panel.getByRole('button', { name: '返回插件列表', exact: true }).click()
     await openPage(panel, '子智能体')
     expect(await depth.inputValue()).toBe('1')
