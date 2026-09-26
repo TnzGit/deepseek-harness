@@ -84,7 +84,8 @@ describe('minimal agent preset', () => {
     expect(agentHandle.agent.session.snapshotEvents().some(event => event.type === 'user/message'
       && event.data.source.kind === 'runtime-context')).toBe(false)
     expect(scaffold.ctx.agentPresets.serviceFor(agentHandle.agent, 'fs')).toBeUndefined()
-    expect(scaffold.ctx.agentPresets.serviceFor(agentHandle.agent, 'compaction')).toBeUndefined()
+    expect(scaffold.ctx.agentPresets.serviceFor(agentHandle.agent, 'compaction')).toBeDefined()
+    expect(scaffold.ctx.commands.find(agentHandle.agent, 'compact')).toBeDefined()
 
     const stateDir = join(scaffold.workspaceCwd, 'persistent-state')
     await mkdir(stateDir)
@@ -114,11 +115,13 @@ describe('minimal agent preset', () => {
       prompt: systemPrompt,
       tools: requestHeader.tools?.map(tool => tool.name),
       goalCommand: scaffold.ctx.commands.find(agentHandle.agent, 'goal') !== undefined,
+      compactCommand: scaffold.ctx.commands.find(agentHandle.agent, 'compact') !== undefined,
       bash: text(bash),
     }).toMatchInlineSnapshot(`
       {
         "bash": "PERSISTED:{{cwd}}/persistent-state
       [Command finished with exit code 0]",
+        "compactCommand": true,
         "goalCommand": false,
         "prompt": "You are a helpful software engineer assistant.",
         "tools": [

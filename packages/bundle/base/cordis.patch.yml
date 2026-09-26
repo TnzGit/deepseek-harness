@@ -88,6 +88,9 @@
     - id: jobs
       name: '@deepseek-ai/dsh-jobs-local'
 
+    - id: long-task-monitor
+      name: '@deepseek-ai/dsh-long-task-monitor'
+
     - id: llm-retry
       name: '@deepseek-ai/dsh-llm-retry'
 
@@ -456,6 +459,12 @@
       config:
         thresholds: [3, 5, 8]
         argumentsPreviewChars: 500
+
+    # Outbound task-end notifications are available to every base-backed
+    # profile but ship disabled. All fields are volatile, so the generic
+    # Settings surface can enable or retarget the notifier without a restart.
+    - id: hooks-notify
+      name: '@deepseek-ai/dsh-hooks-notify'
 
     # The shared base enables the stable model-facing web_search and web_fetch
     # tools. The Web app disables this host row and composes both tools per agent

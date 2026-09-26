@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSessionFormatCatalogWithChildren, sessionFormatCatalog } from '../src/index.ts'
+import { createSessionFormatCatalogWithChildren, historicalV4SessionFormatCatalog, sessionFormatCatalog } from '../src/index.ts'
 
 const header = { type: 'session', version: 3, id: 'parent', createdAt: 1, isSeeded: false, delegationDepth: 0 }
 const policy = { recovery: 'strict', validation: 'current' } as const
@@ -12,6 +12,7 @@ describe('parent-specific catalog assembly', () => {
     expect(() => sessionFormatCatalog.createRestore(header, policy)).toThrow('explicit historical child facts')
     expect(createSessionFormatCatalogWithChildren([]).createRestore(header, policy).finish().events).toEqual([])
     expect(sessionFormatCatalog.createRestore({ ...header, version: 4 }, policy).finish().events).toEqual([])
+    expect(historicalV4SessionFormatCatalog.createRestore({ ...header, version: 4 }, policy).finish().header.version).toBe(4)
   })
 
   it('isolates interleaved restores and child evidence across parent catalogs', () => {

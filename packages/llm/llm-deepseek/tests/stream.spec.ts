@@ -34,6 +34,25 @@ describe('Messages stream', () => {
     expect(result.output.filter(chunk => chunk.type === 'block-start').map(chunk => chunk.index)).toEqual([0, 1])
   })
 
+  it('rejects one tool-call id reused by a different provider block index before the second start', async () => {
+    const emitted = []
+    let failure: unknown
+    try {
+      for await (const chunk of translate(events([
+        start,
+        { type: 'content_block_start', index: 4, content_block: { type: 'tool_use', id: 'dup', name: 'one', input: {} } },
+        { type: 'content_block_start', index: 9, content_block: { type: 'tool_use', id: 'dup', name: 'two', input: {} } },
+      ]), MODEL)) emitted.push(chunk)
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toMatchObject({ code: 'DUPLICATE_TOOL_CALL_ID' })
+    expect(emitted.filter(chunk => chunk.type === 'block-start')).toEqual([
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+    ])
+  })
+
   it.each(['end_turn', 'stop_sequence'])('maps %s and ignores forward-compatible envelope events', async (reason) => {
     const result = await chunks(translate(events([start, { type: 'future_event' }, ...textEvents.slice(1, 4), ...end(reason)]), MODEL))
     expect(result.at(-1)).toMatchObject({ reason: { kind: 'stop' } })

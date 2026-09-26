@@ -53,6 +53,16 @@ export const PAGE_MESSAGES = 50
 
 const HISTORY_PAGE_OPTIONS = { maxMessages: 500, turnWindow: { minMessages: PAGE_MESSAGES, minTurns: 2 } }
 
+/** Mobile opens only a small tail; explicit paging still uses ordinary history windows. */
+const MOBILE_INITIAL_PAGE_OPTIONS = { maxMessages: 50, turnWindow: { minMessages: 3, minTurns: 2 } }
+const MOBILE_HISTORY_MEDIA = '(max-width: 767px)'
+
+function initialHistoryPageOptions(): typeof HISTORY_PAGE_OPTIONS {
+  return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia(MOBILE_HISTORY_MEDIA).matches
+    ? MOBILE_INITIAL_PAGE_OPTIONS
+    : HISTORY_PAGE_OPTIONS
+}
+
 /** Minimum messages per page while a turn jump loops backwards. */
 export const JUMP_PAGE_MESSAGES = 200
 
@@ -628,7 +638,7 @@ export class Session implements SessionFace {
     })
     this.events = events
     try {
-      await events.open(HISTORY_PAGE_OPTIONS)
+      await events.open(initialHistoryPageOptions())
       if (generation !== this.openGeneration || this.events !== events) return
       this.openState = 'open'
     } catch (error) {

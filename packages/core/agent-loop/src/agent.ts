@@ -16,8 +16,10 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
-import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
+  DEGENERATE_RESPONSE_CODE,
+  EMPTY_RESPONSE_CODE,
   LlmError,
   createAssistantMessage,
   createDeveloperMessage,
@@ -38,6 +40,12 @@ import { RuntimeContextProjection } from './runtime-context.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
+import { StreamRepetitionDetector, withProjectedDegenerateRecovery } from './degenerate-response.ts'
+import {
+  reasoningOnlyMaxTokenFacts,
+  repeatsProjectedMaxTokenCheckpoint,
+  withProjectedMaxTokenContinuation,
+} from './max-token-continuation.ts'
 
 type Phase =
   | { kind: 'idle'; lastTurn: number }
@@ -51,6 +59,8 @@ type Phase =
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
 
+type StepResult = StepEndReason | { kind: 'continue-max-tokens'; outputTokens: number }
+
 type PreparedStep =
   | { kind: 'reject' }
   | {
@@ -59,6 +69,26 @@ type PreparedStep =
     startsRequestSeries?: true
     assembly: PromptAssembly
   }
+
+interface DegenerateResponseFacts {
+  visibleCharacters: number
+  toolCallCount: number
+}
+
+/** Reasoning is private work, not a visible answer; emoji and symbols remain valid short replies. */
+function degenerateResponseFacts(content: readonly ContentBlock[]): DegenerateResponseFacts | undefined {
+  const toolCallCount = content.filter(block => block.type === 'tool-call').length
+  if (toolCallCount > 0) return
+  // Media is a usable response even when it has no accompanying text.
+  if (content.some(block => block.type === 'image' || block.type === 'file')) return
+  const visible = content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim()
+  if (visible !== '' && !/^[\p{P}\s]+$/u.test(visible)) return
+  return { visibleCharacters: Array.from(visible).length, toolCallCount }
+}
 
 /** Remove adapter-derived values before plugins propose the next request config. */
 function requestProposal(header: EpochHeader): LlmCallConfig {
@@ -309,6 +339,11 @@ export class ReactLoopAgent implements Agent {
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
+    let maxTokenContinuations = 0
+    let maxTokenContinuationOutputTokens = 0
+    const maxTokenContinuationLimit = this.loopCtx.agentLoop.config.maxTokenContinuations.get()
+    const maxTokenContinuationOutputTokenLimit = this.loopCtx.agentLoop.config
+      .maxTokenContinuationOutputTokens.get()
     try {
       while (true) {
         signal.throwIfAborted()
@@ -329,11 +364,22 @@ export class ReactLoopAgent implements Agent {
         this.session.append('step/start', { turn, step })
         phase.step = step
         try {
-          // max-tokens is sticky: once any step hits the ceiling, later steps
-          // that complete normally must not downgrade the turn outcome.
-          const stepEnd = await this.step(decision)
-          // max-tokens stays sticky: a later completed step must not
-          // downgrade the turn outcome.
+          // A reasoning-only capped response can open another step without
+          // making max-tokens sticky; ordinary capped finishes remain terminal.
+          const stepEnd = await this.step(
+            decision,
+            maxTokenContinuations,
+            maxTokenContinuationLimit,
+            maxTokenContinuationOutputTokens,
+            maxTokenContinuationOutputTokenLimit,
+          )
+          if (stepEnd?.kind === 'continue-max-tokens') {
+            maxTokenContinuations += 1
+            maxTokenContinuationOutputTokens += stepEnd.outputTokens
+            target = 'next-step'
+            continue
+          }
+          // Ordinary max-tokens stays sticky if a plugin supplies later work.
           if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
         } finally {
           this.session.append('step/end', { turn, step })
@@ -378,7 +424,13 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
-  private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
+  private async step(
+    decision: Extract<PreparedStep, { kind: 'enter' }>,
+    maxTokenContinuations: number,
+    maxTokenContinuationLimit: number,
+    maxTokenContinuationOutputTokens: number,
+    maxTokenContinuationOutputTokenLimit: number,
+  ): Promise<StepResult | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
     const { turn, step, abort: { signal } } = this.phase
@@ -387,8 +439,11 @@ export class ReactLoopAgent implements Agent {
     const { assembly } = decision
     const renderedPrompt = renderPrompt(assembly)
     let firstAttempt = true
+    let degenerateRecoveryUsed = false
     while (true) {
-      const { config, preparedCall } = await this.prepareRequest(turn, step, signal)
+      const attemptAbort = new AbortController()
+      const attemptSignal = AbortSignal.any([signal, attemptAbort.signal])
+      const { config, preparedCall } = await this.prepareRequest(turn, step, attemptSignal)
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
       const commits = this.systemPrompt.project(renderedPrompt, {
         inHistory: preparedCall?.systemPromptUpdate === 'in-history',
@@ -405,7 +460,7 @@ export class ReactLoopAgent implements Agent {
         }
       }
       firstAttempt = false
-      const request = this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal)
+      const request = this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, attemptSignal)
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -415,60 +470,159 @@ export class ReactLoopAgent implements Agent {
         (frame) => { this.dispatch.emit('agent/assistant-stream', { frame }) },
       )
       let started = false
+      const repetitionDetector = new StreamRepetitionDetector()
+      let streamRepetition: ReturnType<StreamRepetitionDetector['push']>
       try {
         const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)
-        signal.throwIfAborted()
+        attemptSignal.throwIfAborted()
         live.start()
         started = true
         for await (const chunk of stream) {
           signal.throwIfAborted()
+          streamRepetition = repetitionDetector.push(chunk)
+          if (streamRepetition !== undefined) {
+            attemptAbort.abort(new Error('degenerate model stream repetition'))
+            break
+          }
           live.push(chunk)
         }
-        signal.throwIfAborted()
+        if (streamRepetition === undefined) attemptSignal.throwIfAborted()
       } catch (error: unknown) {
         if (!started) throw error
-        try {
-          if (signal.aborted) {
-            const content = live.interruptedBlocks()
-            if (content.length > 0) {
-              live.settle('assistant/message', () => this.session.append('assistant/message', {
-                turn,
-                step,
-                message: createAssistantMessage({
-                  content,
-                  source: {
-                    provider: request.provider,
-                    model: request.model,
-                    ...live.replayState === undefined ? {} : { replayState: live.replayState },
-                  },
-                }),
-                interrupted: true,
-                ...live.usage === undefined ? {} : { usage: live.usage },
-                stream: live.stream,
-              }, { surfaceOp: 'append' }).seq)
+        if (streamRepetition !== undefined && !signal.aborted) {
+          // The attempt-local guard aborted its own producer. The attempt is
+          // settled below as a recoverable degenerate stream, not as a turn abort.
+        } else {
+          try {
+            if (signal.aborted) {
+              const content = live.interruptedBlocks()
+              if (content.length > 0) {
+                live.settle('assistant/message', () => this.session.append('assistant/message', {
+                  turn,
+                  step,
+                  message: createAssistantMessage({
+                    content,
+                    source: {
+                      provider: request.provider,
+                      model: request.model,
+                      ...live.replayState === undefined ? {} : { replayState: live.replayState },
+                    },
+                  }),
+                  interrupted: true,
+                  ...live.usage === undefined ? {} : { usage: live.usage },
+                  stream: live.stream,
+                }, { surfaceOp: 'append' }).seq)
+              } else {
+                live.settle(
+                  'assistant/attempt',
+                  () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+                )
+              }
             } else {
               live.settle(
                 'assistant/attempt',
                 () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
               )
             }
-          } else {
-            live.settle(
-              'assistant/attempt',
-              () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+          } catch (settlementError: unknown) {
+            throw new AggregateError(
+              [error, settlementError],
+              'Assistant stream failed and its durable settlement was rejected',
+              { cause: error },
             )
           }
-        } catch (settlementError: unknown) {
-          throw new AggregateError(
-            [error, settlementError],
-            'Assistant stream failed and its durable settlement was rejected',
-            { cause: error },
+          throw error
+        }
+      }
+      if (streamRepetition !== undefined) {
+        live.settle(
+          'assistant/attempt',
+          () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+        )
+        const attempt = degenerateRecoveryUsed ? 2 : 1
+        const action = degenerateRecoveryUsed ? 'error' : 'retry'
+        this.session.append('agent/degenerate-response', {
+          turn,
+          step,
+          provider: request.provider,
+          model: request.model,
+          attempt,
+          action,
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        this.loopCtx.logger.warn('agent "%s": detected degenerate model stream repetition: %o', this.id, {
+          provider: request.provider,
+          model: request.model,
+          turn,
+          step,
+          attempt,
+          finishKind: 'stream-repetition',
+          visibleCharacters: 0,
+          toolCallCount: 0,
+          ...streamRepetition,
+        })
+        if (degenerateRecoveryUsed) {
+          throw new LlmError(
+            `model "${request.model}" repeatedly streamed degenerate punctuation reasoning`,
+            DEGENERATE_RESPONSE_CODE,
           )
         }
-        throw error
+        degenerateRecoveryUsed = true
+        continue
       }
       try {
         const finish = live.finish
+        const settleDegenerateAttempt = (
+          attempt: 1 | 2,
+          action: 'retry' | 'error',
+          facts: DegenerateResponseFacts,
+        ): void => {
+          live.settle(
+            'assistant/attempt',
+            () => this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,
+          )
+          this.session.append('agent/degenerate-response', {
+            turn,
+            step,
+            provider: request.provider,
+            model: request.model,
+            attempt,
+            action,
+            finishKind: 'stop',
+            ...facts,
+            ...live.usage === undefined ? {} : { outputTokens: live.usage.outputTokens },
+          })
+        }
+        const recoverDegenerate = (facts: DegenerateResponseFacts): boolean => {
+          const attempt = degenerateRecoveryUsed ? 2 : 1
+          const action = degenerateRecoveryUsed ? 'error' : 'retry'
+          settleDegenerateAttempt(attempt, action, facts)
+          this.loopCtx.logger.warn('agent "%s": detected degenerate model response: %o', this.id, {
+            provider: request.provider,
+            model: request.model,
+            turn,
+            step,
+            attempt,
+            outputTokens: live.usage?.outputTokens,
+            finishKind: 'stop',
+            ...facts,
+          })
+          if (degenerateRecoveryUsed) {
+            throw new LlmError(
+              `model "${request.model}" repeatedly stopped without a usable visible answer or tool call`,
+              DEGENERATE_RESPONSE_CODE,
+            )
+          }
+          degenerateRecoveryUsed = true
+          return true
+        }
+
+        if (finish.kind === 'error' && finish.failure.code === EMPTY_RESPONSE_CODE) {
+          if (recoverDegenerate({ visibleCharacters: 0, toolCallCount: 0 })) continue
+        }
         if (finish.kind === 'error' || finish.kind === 'aborted') {
           live.settle(
             'assistant/attempt',
@@ -492,8 +646,14 @@ export class ReactLoopAgent implements Agent {
           continue
         }
 
+        const content = live.blocks()
+        if (finish.kind === 'stop') {
+          const facts = degenerateResponseFacts(content)
+          if (facts !== undefined && recoverDegenerate(facts)) continue
+        }
+
         const message = createAssistantMessage({
-          content: live.blocks(),
+          content,
           source: {
             provider: request.provider,
             model: request.model,
@@ -510,7 +670,66 @@ export class ReactLoopAgent implements Agent {
             stream: live.stream,
           }, { surfaceOp: 'append' }).seq,
         )
-        if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
+        if (finish.kind === 'max-tokens') {
+          const facts = reasoningOnlyMaxTokenFacts(message.content)
+          const outputTokens = live.usage?.outputTokens ?? request.maxTokens
+          const cumulativeOutputTokens = outputTokens === undefined
+            ? undefined
+            : maxTokenContinuationOutputTokens + outputTokens
+          const recovery = this.loopCtx.sessionProjections.stateOf(this.session, 'agentRecovery')
+          const repeatedCheckpoint = facts !== undefined
+            && recovery !== undefined
+            && repeatsProjectedMaxTokenCheckpoint(recovery, turn, message.content)
+          if (facts !== undefined
+            && !repeatedCheckpoint
+            && maxTokenContinuations < maxTokenContinuationLimit
+            && outputTokens !== undefined
+            && cumulativeOutputTokens !== undefined
+            && cumulativeOutputTokens <= maxTokenContinuationOutputTokenLimit) {
+            const attempt = maxTokenContinuations + 1
+            this.session.append('agent/max-token-continuation', {
+              turn,
+              step,
+              continuationStep: step + 1,
+              attempt,
+              ...facts,
+              ...live.usage === undefined ? {} : { outputTokens: live.usage.outputTokens },
+              cumulativeOutputTokens,
+            })
+            this.loopCtx.logger.warn('agent "%s": automatically continuing reasoning-only max-tokens response: %o', this.id, {
+              provider: request.provider,
+              model: request.model,
+              turn,
+              step,
+              continuationStep: step + 1,
+              attempt,
+              maxTokenContinuationLimit,
+              maxTokenContinuationOutputTokenLimit,
+              ...facts,
+              outputTokens,
+              cumulativeOutputTokens,
+            })
+            return { kind: 'continue-max-tokens', outputTokens }
+          }
+          if (facts !== undefined) {
+            this.loopCtx.logger.warn('agent "%s": reasoning-only max-tokens continuation stopped: %o', this.id, {
+              provider: request.provider,
+              model: request.model,
+              turn,
+              step,
+              attempts: maxTokenContinuations,
+              maxTokenContinuationLimit,
+              outputTokens,
+              cumulativeOutputTokens,
+              maxTokenContinuationOutputTokenLimit,
+              repeatedCheckpoint,
+            })
+          }
+          return {
+            kind: 'max-tokens',
+            ...maxTokenContinuations === 0 ? {} : { autoContinuation: 'exhausted' },
+          }
+        }
 
         const toolCalls = message.content.filter(block => block.type === 'tool-call')
         if (toolCalls.length === 0) return { kind: 'completed' }
@@ -651,7 +870,12 @@ export class ReactLoopAgent implements Agent {
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)
-    const boundaryMessages = session.deriveMessages()
+    const recovery = this.loopCtx.sessionProjections.stateOf(session, 'agentRecovery')
+    if (recovery === undefined) throw new Error('agent recovery projection is unavailable')
+    const boundaryMessages = withProjectedMaxTokenContinuation(
+      recovery,
+      withProjectedDegenerateRecovery(recovery, session.deriveMessages()),
+    )
     for (const message of boundaryMessages) {
       if (this.frozenMessages.has(message)) continue
       deepFreeze(message)

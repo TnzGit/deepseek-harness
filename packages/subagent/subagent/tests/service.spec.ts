@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
 import { type Agent } from '@deepseek-ai/dsh-agent'
 
 import { HarnessError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -21,8 +22,11 @@ import SubagentRuntime, {
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 
-function fakeParent(id = 'parent-1'): Agent {
-  return { id: SessionId(id) } as unknown as Agent
+function fakeParent(id = 'parent-1', origin?: 'subagent'): Agent {
+  return {
+    id: SessionId(id),
+    session: { header: { id: SessionId(id), ...origin === undefined ? {} : { origin } } },
+  } as Agent
 }
 
 const ALL_CAPS: SubagentCapabilities = { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true }
@@ -63,6 +67,44 @@ class StubProvider implements SubagentProvider {
   }
 }
 
+
+class GatedProvider implements SubagentProvider {
+  readonly inheritsParentContext = false
+  readonly capabilities = ALL_CAPS
+  readonly starts: string[] = []
+  readonly gates: Array<PromiseWithResolvers<SubagentResult>> = []
+
+  constructor(readonly name: string) {}
+
+  async start(request: ResolvedSubagentStartRequest): Promise<SubagentRun> {
+    this.starts.push(request.label ?? `run-${this.starts.length + 1}`)
+    const gate = Promise.withResolvers<SubagentResult>()
+    this.gates.push(gate)
+    let disposed = false
+    return {
+      id: SessionId(`child:${this.name}:${this.starts.length}`),
+      localAgent: undefined,
+      result: gate.promise,
+      async dispose() {
+        if (disposed) return
+        disposed = true
+        gate.resolve({ output: [], stopReason: 'aborted' })
+      },
+    }
+  }
+
+  settle(index: number): void {
+    this.gates[index]!.resolve({
+      output: [{ type: 'text', text: `done-${index + 1}` }],
+      stopReason: 'completed',
+    })
+  }
+
+  fail(index: number, message = 'run failed'): void {
+    this.gates[index]!.reject(new Error(message))
+  }
+}
+
 async function service(): Promise<{ ctx: Context; subagents: SubagentRuntime }> {
   const ctx = new Context()
   // The registry is a required injection of SubagentRuntime (its projection
@@ -89,6 +131,170 @@ describe('SubagentRuntime', () => {
     await fiber.dispose()
 
     expect(ctx.sessionProjections.stateOf(parent, 'subagentCatalog')).toBeUndefined()
+  })
+
+  it('serializes one-shot starts in FIFO order and releases capacity on result settlement', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const secondPending = ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    const thirdPending = ctx.subagents.start('gated', baseRequest({ label: 'third' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first'])
+
+    provider.settle(0)
+    const second = await secondPending
+    expect(provider.starts).toEqual(['first', 'second'])
+    provider.settle(1)
+    const third = await thirdPending
+    expect(provider.starts).toEqual(['first', 'second', 'third'])
+
+    provider.settle(2)
+    await Promise.all([first.result, second.result, third.result])
+    await ctx.fiber.dispose()
+  })
+
+  it('removes an aborted queued start without consuming a provider slot', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const controller = new AbortController()
+    const queued = ctx.subagents.start('gated', baseRequest({ label: 'cancelled', signal: controller.signal }))
+    await Promise.resolve()
+    controller.abort(new Error('cancel queued start'))
+
+    await expect(queued).rejects.toThrow('cancel queued start')
+    expect(provider.starts).toEqual(['first'])
+    provider.settle(0)
+    await first.result
+    await ctx.fiber.dispose()
+  })
+
+  it('releases one-shot capacity when provider startup fails', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const gated = new GatedProvider('gated')
+    let attempts = 0
+    ctx.subagents.registerProvider({
+      name: 'flaky',
+      inheritsParentContext: false,
+      capabilities: ALL_CAPS,
+      async start(request) {
+        attempts += 1
+        if (attempts === 1) throw new Error('startup failed')
+        return gated.start(request)
+      },
+    })
+
+    await expect(ctx.subagents.start('flaky', baseRequest({ label: 'first' }))).rejects.toThrow('startup failed')
+    const second = await ctx.subagents.start('flaky', baseRequest({ label: 'second' }))
+    expect(attempts).toBe(2)
+    gated.settle(0)
+    await second.result
+    await ctx.fiber.dispose()
+  })
+
+  it('fails nested one-shot starts fast at capacity instead of deadlocking behind their parent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'root child' }))
+    await expect(ctx.subagents.start('gated', baseRequest({
+      label: 'nested child',
+      parent: fakeParent('nested-parent', 'subagent'),
+    }))).rejects.toMatchObject({ code: 'EXECUTION_LIMIT_REACHED' })
+    expect(provider.starts).toEqual(['root child'])
+
+    provider.settle(0)
+    await first.result
+    await ctx.fiber.dispose()
+  })
+
+  it('releases one-shot capacity when the published run result rejects', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const secondPending = ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first'])
+
+    provider.fail(0, 'infrastructure failure')
+    await expect(first.result).rejects.toThrow('infrastructure failure')
+    const second = await secondPending
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(1)
+    await second.result
+    await ctx.fiber.dispose()
+  })
+
+  it('honors a lower live capacity without cancelling accepted runs', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    const config = await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 2 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const second = await ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    await config.update({ maxConcurrentRuns: 1 })
+    const thirdPending = ctx.subagents.start('gated', baseRequest({ label: 'third' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(0)
+    await first.result
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(1)
+    await second.result
+    const third = await thirdPending
+    expect(provider.starts).toEqual(['first', 'second', 'third'])
+
+    provider.settle(2)
+    await third.result
+    await ctx.fiber.dispose()
+  })
+
+  it('admits queued starts immediately when live concurrent capacity increases', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    const config = await liveConfig(ctx, SubagentRuntime, { maxConcurrentRuns: 1 })
+    const provider = new GatedProvider('gated')
+    ctx.subagents.registerProvider(provider)
+
+    const first = await ctx.subagents.start('gated', baseRequest({ label: 'first' }))
+    const secondPending = ctx.subagents.start('gated', baseRequest({ label: 'second' }))
+    await Promise.resolve()
+    expect(provider.starts).toEqual(['first'])
+
+    await config.update({ maxConcurrentRuns: 2 })
+    const second = await secondPending
+    expect(provider.starts).toEqual(['first', 'second'])
+
+    provider.settle(0)
+    provider.settle(1)
+    await Promise.all([first.result, second.result])
+    await ctx.fiber.dispose()
   })
 
   it('registers, lists, looks up, starts, and removes providers', async () => {

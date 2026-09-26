@@ -461,17 +461,20 @@ describe('catalog routes with per-model configuration', () => {
     })
 
     const info = await ctx.llm.resolveModelInfo('deepseek', catalogModel.id)
-    // The configured field wins and the name still comes from the catalog. The
-    // catalog's own output cap is the model's capability, not a cap anyone
-    // chose, so it must not arrive as the request default.
+    // The configured field wins and the name still comes from the catalog.
+    // pi-ai sends the resolved model cap when a request omits maxTokens, so
+    // Harness must expose that effective default for pressure accounting.
     expect(info.context).toEqual({ contextWindow: 4096 })
     expect(info.name).toBe(catalogModel.name)
-    expect(info.defaultMaxTokens).toBeUndefined()
+    expect(info.defaultMaxTokens).toBe(catalogModel.maxTokens)
+    const prepared = await ctx.llm.prepareCall({ provider: 'deepseek', model: catalogModel.id })
+    expect(prepared.config.maxTokens).toBe(catalogModel.maxTokens)
+    expect(prepared.adapterDefaults.maxTokens).toBe(true)
     // An explicit list replaces the catalog rather than adding to it.
     expect((await ctx.llm.listModels('deepseek')).map(model => model.id)).toEqual([catalogModel.id])
   })
 
-  it('materializes a request default only from a configured output cap', async () => {
+  it('lets an explicitly configured output cap replace the effective request default', async () => {
     const server = await mockServer([])
     const [catalogModel] = getBuiltinModels('deepseek')
     if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')
@@ -706,6 +709,47 @@ describe('per-model reasoning efforts', () => {
 
     expect(model.reasoning).toBe(catalogModel.reasoning)
     expect(model.thinkingLevelMap).toEqual(catalogModel.thinkingLevelMap)
+  })
+
+  it('uses a route default only for models the installed catalog does not describe', () => {
+    const defaultReasoningEfforts = { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' }
+    const handDeclared = modelOf({
+      'acme-gateway': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        defaultReasoningEfforts,
+        models: [{ id: 'rolling-model-id' }],
+      },
+    })
+    expect(getSupportedThinkingLevels(handDeclared)).toEqual(['off', 'low', 'medium', 'xhigh'])
+
+    const [catalogModel] = getBuiltinModels('deepseek')
+    if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const known = modelOf({
+      deepseek: {
+        defaultReasoningEfforts,
+        models: [{ id: catalogModel.id }],
+      },
+    }, 'deepseek')
+    expect(getSupportedThinkingLevels(known)).toEqual(getSupportedThinkingLevels(catalogModel as Model<Api>))
+  })
+
+  it('lets a model override or disable the route reasoning default', () => {
+    const providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
+      'acme-gateway': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        defaultReasoningEfforts: { off: null, low: 'low', medium: 'medium', xhigh: 'xhigh' },
+        models: [
+          { id: 'narrow', reasoningEfforts: { off: null, low: 'brief' } },
+          { id: 'plain', reasoningEfforts: false },
+        ],
+      },
+    }
+    const models = resolveProfiles(providers).get('acme-gateway')?.piProvider?.getModels() ?? []
+    expect(getSupportedThinkingLevels(models[0] as Model<Api>)).toEqual(['off', 'low'])
+    expect((models[0] as Model<Api>).thinkingLevelMap?.low).toBe('brief')
+    expect((models[1] as Model<Api>).reasoning).toBe(false)
   })
 
   it('rejects a declaration that offers nothing or spells a level it cannot send', () => {

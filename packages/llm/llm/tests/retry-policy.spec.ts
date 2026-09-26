@@ -49,6 +49,41 @@ describe('provider retry policy', () => {
     })
   })
 
+  it('resolves an immutable per-failure override against route backoff', () => {
+    const policy = resolveRetryPolicy({
+      mode: 'normal',
+      maxRetries: 5,
+      retryableCodes: ['TIMEOUT', 'TRANSPORT'],
+      backoff: { initialDelayMs: 8_550, maxDelayMs: 8_550, jitterRatio: 0 },
+      failureOverrides: {
+        TIMEOUT: {
+          maxRetries: 3,
+          backoff: { initialDelayMs: 15_000, maxDelayMs: 60_000 },
+        },
+      },
+    }, 'provider.retryPolicy')
+
+    expect(policy).toEqual({
+      mode: 'normal',
+      maxRetries: 5,
+      retryableCodes: ['TIMEOUT', 'TRANSPORT'],
+      initialDelayMs: 8_550,
+      maxDelayMs: 8_550,
+      jitterRatio: 0,
+      failureOverrides: {
+        TIMEOUT: {
+          maxRetries: 3,
+          initialDelayMs: 15_000,
+          maxDelayMs: 60_000,
+          jitterRatio: 0,
+        },
+      },
+    })
+    if (policy.mode !== 'normal') throw new Error('expected normal policy')
+    expect(Object.isFrozen(policy.failureOverrides)).toBe(true)
+    expect(Object.isFrozen(policy.failureOverrides?.TIMEOUT)).toBe(true)
+  })
+
   it('resolves always mode with default backoff', () => {
     expect(resolveRetryPolicy({ mode: 'always' }, 'provider.retryPolicy')).toEqual({
       mode: 'always',
@@ -89,6 +124,9 @@ describe('provider retry policy', () => {
     [{ mode: 'normal', retryableCodes: [''] }, /non-empty strings/],
     [{ mode: 'normal', retryableCodes: [429] }, /non-empty strings/],
     [{ mode: 'normal', maxRetires: 1 }, /unknown key "maxRetires"/],
+    [{ mode: 'normal', failureOverrides: { BUSY: {} } }, /must also appear in retryableCodes/],
+    [{ mode: 'normal', retryableCodes: ['TIMEOUT'], failureOverrides: { TIMEOUT: { maxRetries: -1 } } }, /maxRetries/],
+    [{ mode: 'normal', retryableCodes: ['TIMEOUT'], failureOverrides: { TIMEOUT: { later: 1 } } }, /unknown key "later"/],
     [{ mode: 'always', backoff: { initialDelay: 1 } }, /unknown key "initialDelay"/],
     [{ mode: 'sometimes' }, /mode must be "normal" or "always"/],
   ] as const)('rejects invalid policy %#', (config, message) => {

@@ -11,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
@@ -31,6 +31,7 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   internals.stdout = process.stdout
   internals.stderr = process.stderr
+  vi.unstubAllEnvs()
 })
 
 /**
@@ -60,10 +61,11 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     `  name: ${pathToFileURL(join(dir, 'reader.mjs')).href}`,
     `  inject: [${WEB_STARTUP_SERVICE}]`,
     '  config:',
-    "    host: !!js ctx.webStartup.host ?? '127.0.0.1'",
+    "    host: !!js ctx.webStartup.host ?? '0.0.0.0'",
     '    openBrowser: !!js ctx.webStartup.openBrowser',
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    allowUnauthenticated: true',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -106,7 +108,7 @@ describe('web command-line provider', () => {
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
     })
-    expect(observed.readerConfig).toEqual(values)
+    expect(observed.readerConfig).toEqual({ ...values, allowUnauthenticated: true })
     expect(observed.exits).toEqual([])
   })
 
@@ -114,10 +116,11 @@ describe('web command-line provider', () => {
     const { values, observed } = await bootProvider([])
     expect(values).toEqual({ openBrowser: true, trustedHosts: [] })
     expect(observed.readerConfig).toEqual({
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       openBrowser: true,
       port: 3080,
       trustedHosts: [],
+      allowUnauthenticated: true,
     })
   })
 
@@ -139,11 +142,25 @@ describe('web command-line provider', () => {
     expect(observed.exits).toEqual([1])
   })
 
-  it('rejects the intentionally unsupported all-interfaces host before the consumer activates', async () => {
+  it('allows the all-interfaces host and no-login access without environment opt-ins', async () => {
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(observed.out).toContain('--host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
-    expect(values).toBeUndefined()
-    expect(observed.readerConfig).toBeUndefined()
-    expect(observed.exits).toEqual([1])
+    expect(values).toEqual({
+      host: '0.0.0.0',
+      openBrowser: true,
+      trustedHosts: [],
+    })
+    expect(observed.readerConfig).toEqual({
+      host: '0.0.0.0',
+      openBrowser: true,
+      port: 3080,
+      trustedHosts: [],
+      allowUnauthenticated: true,
+    })
+    expect(observed.exits).toEqual([])
+  })
+
+  it('keeps no-login access when binding is explicitly restricted to loopback', async () => {
+    const local = await bootProvider(['--host', '127.0.0.1'])
+    expect(local.observed.readerConfig).toMatchObject({ host: '127.0.0.1', allowUnauthenticated: true })
   })
 })

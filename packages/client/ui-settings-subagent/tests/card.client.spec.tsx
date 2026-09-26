@@ -40,6 +40,7 @@ function renderSubagent(
     ...settled,
     maxDepth: field('3'),
     maxActiveSubagents: field('8'),
+    maxConcurrentRuns: field('8'),
     ...limitState,
   })
   const models = createSnapshotStore<SubagentModelSelectionCardState>({
@@ -203,6 +204,7 @@ describe('SubagentCard', () => {
     renderSubagent({ dirty: true, maxDepth: field('2') })
     const depthHelp = screen.getByRole('button', { name: en.subagentDepthHelpLabel })
     const capacityHelp = screen.getByRole('button', { name: en.subagentCapacityHelpLabel })
+    const concurrentHelp = screen.getByRole('button', { name: en.subagentConcurrentHelpLabel })
     expect(depthHelp.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText(en.subagentDepthHelp)).toBeNull()
     expect(screen.queryByText(en.subagentCapacityHelp)).toBeNull()
@@ -217,6 +219,8 @@ describe('SubagentCard', () => {
     expect(screen.getByText(en.subagentDepthOverride)).toBeTruthy()
     fireEvent.click(capacityHelp)
     expect(screen.getByText(en.subagentCapacityHelp)).toBeTruthy()
+    fireEvent.click(concurrentHelp)
+    expect(screen.getByText(en.subagentConcurrentHelp)).toBeTruthy()
     fireEvent.click(depthHelp)
     expect(screen.queryByText(en.subagentDepthHelp)).toBeNull()
     expect(screen.getByLabelText(en.subagentMaxDepth)).toHaveProperty('value', '2')
@@ -236,12 +240,14 @@ describe('SubagentCard', () => {
       dirty: true,
       maxDepth: field('3', { overridden: true }),
       maxActiveSubagents: field('8', { overridden: true }),
+      maxConcurrentRuns: field('8', { overridden: true }),
     })
     fireEvent.change(screen.getByLabelText(en.subagentMaxDepth), { target: { value: '2' } })
     fireEvent.change(screen.getByLabelText(en.subagentMaxActive), { target: { value: '12' } })
-    expect(actions.editLimit.mock.calls).toEqual([['maxDepth', '2'], ['maxActiveSubagents', '12']])
+    fireEvent.change(screen.getByLabelText(en.subagentMaxConcurrent), { target: { value: '1' } })
+    expect(actions.editLimit.mock.calls).toEqual([['maxDepth', '2'], ['maxActiveSubagents', '12'], ['maxConcurrentRuns', '1']])
     for (const button of screen.getAllByRole('button', { name: en.reset })) fireEvent.click(button)
-    expect(actions.resetLimit.mock.calls).toEqual([['maxDepth'], ['maxActiveSubagents']])
+    expect(actions.resetLimit.mock.calls).toEqual([['maxDepth'], ['maxActiveSubagents'], ['maxConcurrentRuns']])
     act(() => { limits.set({ ...limits.getSnapshot(), writable: false }) })
     expect(screen.getByLabelText(en.subagentMaxActive)).toHaveProperty('disabled', true)
   })

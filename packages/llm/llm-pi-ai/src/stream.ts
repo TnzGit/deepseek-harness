@@ -43,6 +43,12 @@ function classifyPiAiError(message: string): string {
   if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
   if (/\b429\b|rate.?limit/i.test(message)) return 'RATE_LIMIT'
+  // vLLM raises EngineDeadError after its EngineCore fatally exits. pi-ai can
+  // flatten that provider failure to stable text and lose the HTTP 5xx status
+  // that would otherwise classify it as SERVER. Preserve the server-failure
+  // semantics so the existing bounded retry policy can bridge an external
+  // engine restart instead of treating the dead engine as PI_AI_ERROR.
+  if (/\bEngineCore encountered an issue\b|\bEngineDeadError\b/i.test(message)) return 'SERVER'
   // A rejected request body (gateway or provider size cap): resending the
   // same request cannot succeed, so it is invalid, not transient.
   if (/\b413\b|failed to buffer the request body:\s*length limit exceeded|payload too large|request body too large/i.test(message)) return 'INVALID_REQUEST'
@@ -146,8 +152,21 @@ export async function* toStreamChunks(
   requestedModel?: string,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
-  // in stream order), but we track ids per index for tool calls.
+  // in stream order). Track both directions: index→identity powers deltas,
+  // while id→index rejects provider id reuse before a second durable start.
   const toolIds = new Map<number, { id: string; name: string }>()
+  const toolIndexesById = new Map<string, number>()
+  const recordToolId = (id: string, contentIndex: number): void => {
+    if (id.length === 0) return
+    const existingIndex = toolIndexesById.get(id)
+    if (existingIndex !== undefined && existingIndex !== contentIndex) {
+      throw new LlmError(
+        `provider reused tool call id "${id}" for content indexes ${existingIndex} and ${contentIndex}`,
+        'DUPLICATE_TOOL_CALL_ID',
+      )
+    }
+    toolIndexesById.set(id, contentIndex)
+  }
 
   for await (const event of events) {
     switch (event.type) {
@@ -176,6 +195,7 @@ export async function* toStreamChunks(
         const partial = event.partial.content[event.contentIndex]
         const id = partial?.type === 'toolCall' ? partial.id : ''
         const name = partial?.type === 'toolCall' ? partial.name : ''
+        recordToolId(id, event.contentIndex)
         toolIds.set(event.contentIndex, { id, name })
         yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
         break
@@ -192,6 +212,9 @@ export async function* toStreamChunks(
         break
       }
       case 'toolcall_end':
+        // A defensive stream can omit an id-bearing start partial; the terminal
+        // event is then the first reliable identity point, so validate it too.
+        recordToolId(event.toolCall.id, event.contentIndex)
         yield {
           type: 'block-end',
           index: event.contentIndex,

@@ -661,7 +661,7 @@ describe('task admission and package contracts', () => {
     await expect(ctx.subagents.start('claude-diagnostic', {
       ...request(undefined, invalidCwdAbort.signal),
       parent: invalidCwdParent,
-    })).rejects.toThrow('aborted before SDK startup')
+    })).rejects.toThrow('cancel invalid cwd startup')
     expect(queryMock).not.toHaveBeenCalled()
     warn.mockClear()
 

@@ -5,6 +5,7 @@
 
 import type { IncomingMessage } from 'node:http'
 import { Readable } from 'node:stream'
+import { brotliCompressSync, gzipSync } from 'node:zlib'
 import type { ConnectionFetchHandler } from './rpc.ts'
 
 /** Default carrier cap for all HTTP RPC bodies: sized for the default
@@ -12,6 +13,52 @@ import type { ConnectionFetchHandler } from './rpc.ts'
  * headroom (~267.7 MiB required), rounded up for slack. The bridge buffers
  * each body in memory, so this cap is also the per-request resident bound. */
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
+
+/** JSON bodies at or below this size stay uncompressed. */
+const MIN_JSON_COMPRESSION_BYTES = 1024
+type JsonCompression = 'br' | 'gzip'
+
+function preferredJsonCompression(header: string | string[] | undefined): JsonCompression | undefined {
+  if (header === undefined) return undefined
+  const value = Array.isArray(header) ? header.join(',') : header
+  const quality = new Map<string, number>()
+  for (const item of value.split(',')) {
+    const [rawName, ...parameters] = item.trim().split(';')
+    const name = rawName?.trim().toLowerCase()
+    if (!name) continue
+    let q = 1
+    for (const parameter of parameters) {
+      const match = /^\s*q\s*=\s*([0-9.]+)\s*$/i.exec(parameter)
+      if (match === null) continue
+      const parsed = Number(match[1])
+      q = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0
+    }
+    quality.set(name, q)
+  }
+  const wildcard = quality.get('*') ?? 0
+  const br = quality.get('br') ?? wildcard
+  const gzip = quality.get('gzip') ?? wildcard
+  if (br <= 0 && gzip <= 0) return undefined
+  return br >= gzip ? 'br' : 'gzip'
+}
+
+function isJsonResponse(response: Response): boolean {
+  const contentType = response.headers.get('content-type')?.toLowerCase()
+  if (contentType === undefined) return false
+  const mediaType = contentType.split(';', 1)[0]?.trim()
+  return mediaType === 'application/json' || mediaType?.endsWith('+json') === true
+}
+
+function varyByEncoding(headers: Record<string, string>): void {
+  const current = headers.vary
+  if (current === undefined) {
+    headers.vary = 'Accept-Encoding'
+    return
+  }
+  if (!current.split(',').some(value => value.trim().toLowerCase() === 'accept-encoding')) {
+    headers.vary = `${current}, Accept-Encoding`
+  }
+}
 
 interface BridgeServerResponse {
   readonly destroyed: boolean
@@ -21,7 +68,7 @@ interface BridgeServerResponse {
   once(event: 'close' | 'drain', listener: () => void): this
   writeHead(statusCode: number, headers?: Record<string, string>): unknown
   write(chunk: Uint8Array): boolean
-  end(): unknown
+  end(chunk?: Uint8Array): unknown
 }
 
 /**
@@ -94,12 +141,36 @@ export async function bridge(
   const response = await apiHandler.fetch(request)
   const requestUnread = bodyMode === 'streaming' && !req.readableEnded
   const responseHeaders = Object.fromEntries(response.headers.entries())
-  res.writeHead(response.status, requestUnread ? { ...responseHeaders, connection: 'close' } : responseHeaders)
+  const headersForRequest = (): Record<string, string> => (
+    requestUnread ? { ...responseHeaders, connection: 'close' } : responseHeaders
+  )
   if (response.body === null) {
+    res.writeHead(response.status, headersForRequest())
     res.end()
     if (requestUnread) req.destroy()
     return
   }
+  if (isJsonResponse(response) && !response.headers.has('content-encoding')) {
+    const body = Buffer.from(await response.arrayBuffer())
+    const encoding = body.byteLength > MIN_JSON_COMPRESSION_BYTES
+      ? preferredJsonCompression(req.headers['accept-encoding'])
+      : undefined
+    if (encoding !== undefined) {
+      const compressed = encoding === 'br' ? brotliCompressSync(body) : gzipSync(body)
+      responseHeaders['content-encoding'] = encoding
+      responseHeaders['content-length'] = String(compressed.byteLength)
+      varyByEncoding(responseHeaders)
+      res.writeHead(response.status, headersForRequest())
+      res.end(compressed)
+      if (requestUnread) req.destroy()
+      return
+    }
+    res.writeHead(response.status, headersForRequest())
+    res.end(body)
+    if (requestUnread) req.destroy()
+    return
+  }
+  res.writeHead(response.status, headersForRequest())
   for await (const chunk of response.body) {
     // Drain without writing after disconnect: cancelling Node multipart bodies
     // can race their producer and reject with ERR_INVALID_STATE.

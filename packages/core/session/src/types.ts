@@ -86,7 +86,7 @@ export type OptionalSessionSeq = SessionSeq | null
  * immutable prior-generation, and current fast-path rules are recorded in
  * `.agents/notes/implemented/architecture/2026-08-31-released-session-format-migrations.md`.
  */
-export const SESSION_FORMAT_VERSION = 4
+export const SESSION_FORMAT_VERSION = 5
 
 /**
  * Immutable validated storage metadata, kept outside the conversation event log.
@@ -211,7 +211,11 @@ export interface TurnEndReasonMap {
    */
   error: { kind: 'error'; error: LlmFailure }
   /** At least one step reached its output-token ceiling, even if a plugin continued the turn. */
-  'max-tokens': { kind: 'max-tokens' }
+  'max-tokens': {
+    kind: 'max-tokens'
+    /** The loop's bounded reasoning-only automatic continuation also reached the ceiling. */
+    autoContinuation?: 'exhausted'
+  }
   /**
    * A crash-orphaned turn was closed after the fact: agent-loop resume appends
    * this closer for a stored log whose last turn never ended, and session-query

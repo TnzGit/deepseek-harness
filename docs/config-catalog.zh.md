@@ -96,7 +96,7 @@ export interface Config {
 
 - `inject`: `agents` · `sessions` · `llm` · `tools` · `systemPrompt` · `sessionProjections`
 - `refs`: [`AgentOptions`](subsystems/core.zh.md) · [`SessionId`](subsystems/core.zh.md) · `Volatile` (`@deepseek-ai/cosmokit`)
-- `source`: [`packages/core/agent-loop/src/index.ts:292`](../packages/core/agent-loop/src/index.ts)
+- `source`: [`packages/core/agent-loop/src/index.ts:303`](../packages/core/agent-loop/src/index.ts)
 
 ```ts config-catalog
 /** Agent-loop plugin configuration. */
@@ -106,6 +106,13 @@ export interface Config {
    * omission defaults to {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}.
    */
   maxParallelToolCalls: Volatile<number>
+  /**
+   * Maximum automatic reasoning-only output-cap continuations per turn.
+   * Zero disables the recovery.
+   */
+  maxTokenContinuations: Volatile<number>
+  /** Maximum cumulative output tokens spent by one continuation chain. */
+  maxTokenContinuationOutputTokens: Volatile<number>
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -453,6 +460,8 @@ export interface ConnectionConfig {
    * bind. An entry that is not a bare, canonical authority fails plugin load.
    */
   trustedHosts?: string[]
+  /** Disable browser-session auth only for an explicitly trusted LAN deployment. */
+  allowUnauthenticated?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -1367,6 +1376,38 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-hooks-codex -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-hooks-notify -->
+<a id="deepseek-aidsh-hooks-notify"></a>
+
+## `@deepseek-ai/dsh-hooks-notify`
+
+- `refs`: `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/hooks/hooks-notify/src/index.ts:23`](../packages/hooks/hooks-notify/src/index.ts)
+
+```ts config-catalog
+/** Runtime configuration references retained by the mounted plugin. */
+export interface Config {
+  /** Whether outbound notifications are enabled. */
+  readonly enabled: Volatile<boolean>
+  /** HTTP webhook endpoint. */
+  readonly url: Volatile<string>
+  /** Agent or goal lifecycle event that sends a notification. */
+  readonly trigger: Volatile<NotifyTrigger>
+  /** Message body sent to the webhook. */
+  readonly message: Volatile<string>
+  /** Sound name interpreted by the notification receiver. */
+  readonly sound: Volatile<string>
+  /** Number of notification repeats. */
+  readonly repeat: Volatile<number>
+  /** HTTP request deadline in milliseconds. */
+  readonly timeoutMs: Volatile<number>
+}
+
+/** When a notification fires. */
+export type NotifyTrigger = 'turn-end' | 'goal-complete' | 'both'
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-hooks-notify -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-host-directory-picker-browse -->
 <a id="deepseek-aidsh-host-directory-picker-browse"></a>
 
@@ -1581,7 +1622,7 @@ export interface Config extends ProtocolConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:232`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -1654,6 +1695,12 @@ export interface PiAiProviderProfile {
    * to answer instead.
    */
   defaultInput?: PiAiModality[]
+  /**
+   * Reasoning capability for hand-declared models that neither their entry nor
+   * the installed catalog describes. Exact model declarations win, while
+   * installed catalog metadata remains authoritative for known model ids.
+   */
+  defaultReasoningEfforts?: false | PiAiReasoningEfforts
   /** Provider request headers, validated against Fetch when the profile resolves; Harness attribution wins reserved names. */
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
@@ -1670,6 +1717,8 @@ export interface PiAiProviderProfile {
   websocketConnectTimeoutMs?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
+  /** Maximum wait for the first translated provider chunk; defaults to the stream idle timeout. */
+  streamFirstChunkTimeoutMs?: number
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
@@ -1943,6 +1992,36 @@ export interface ReplayModelConfig {
 export type Config = Readonly<Record<string, never>>
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-llm-retry -->
+
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-long-task-monitor -->
+<a id="deepseek-aidsh-long-task-monitor"></a>
+
+## `@deepseek-ai/dsh-long-task-monitor`
+
+- `inject`: `agents`
+- `refs`: `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/core/long-task-monitor/src/index.ts:33`](../packages/core/long-task-monitor/src/index.ts)
+
+```ts config-catalog
+/** Live Loader configuration for conversation and Bash monitoring. */
+export interface Config {
+  /** Enable elapsed-conversation progress checks. */
+  enabled: Volatile<boolean>
+  /** Continuous runtime before the first progress check, in minutes. */
+  startAfterMinutes: Volatile<number>
+  /** Interval between progress checks, in minutes. */
+  reportEveryMinutes: Volatile<number>
+  /** Enable a server-side watchdog for foreground Bash with an explicit long timeout. */
+  bashEnabled: Volatile<boolean>
+  /** Foreground Bash runtime before the first watchdog checkpoint, in minutes. */
+  bashStartAfterMinutes: Volatile<number>
+  /** Interval between foreground Bash watchdog checkpoints, in minutes. */
+  bashReportEveryMinutes: Volatile<number>
+  /** Restrict monitoring to root agents (default true, prevents subagent spam). */
+  rootOnly: boolean
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-long-task-monitor -->
 
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-lsp-stdio -->
 <a id="deepseek-aidsh-lsp-stdio"></a>
@@ -2785,12 +2864,17 @@ export type Config = SessionTitleLlmConfig
 ## `@deepseek-ai/dsh-session-title-first-prompt-llm`
 
 - `inject`: `sessionTitle` · `llm` · `sessions`
-- `refs`: [`SessionTitleLlmConfig`](../packages/session/session-title-llm/src/index.ts)
-- `source`: [`packages/session/session-title-first-prompt-llm/src/index.ts:15`](../packages/session/session-title-first-prompt-llm/src/index.ts)
+- `refs`: [`SessionTitleLlmConfig`](../packages/session/session-title-llm/src/index.ts) · `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/session/session-title-first-prompt-llm/src/index.ts:22`](../packages/session/session-title-first-prompt-llm/src/index.ts)
 
 ```ts config-catalog
-/** Required LLM policy; this plugin adds no defaults. */
-export type Config = SessionTitleLlmConfig
+/** Required LLM policy plus user-editable automatic title cadence. */
+export interface Config extends SessionTitleLlmConfig {
+  /** First prompt only, or periodic retitling after each batch of N further prompts. */
+  readonly mode: Volatile<'first' | 'every-nth'>
+  /** Eligible prompts between revisions in every-nth mode. */
+  readonly everyNPrompts: Volatile<number>
+}
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-session-title-first-prompt-llm -->
 
@@ -3063,13 +3147,15 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ## `@deepseek-ai/dsh-subagent`
 
 - `refs`: `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/subagent/subagent/src/index.ts:192`](../packages/subagent/subagent/src/index.ts)
+- `source`: [`packages/subagent/subagent/src/index.ts:193`](../packages/subagent/subagent/src/index.ts)
 
 ```ts config-catalog
-/** Host configuration for continuable subagent capacity. */
+/** Host configuration for delegation depth, continuable residency, and one-shot execution capacity. */
 export interface Config {
   /** Maximum live children sharing uninterrupted continuable parent links; defaults to 8. */
   maxActiveSubagents: Volatile<number>
+  /** Maximum concurrently executing one-shot runs across providers; defaults to 8. */
+  maxConcurrentRuns: Volatile<number>
   /** Default delegation depth for tools without an explicit limit; defaults to 1. */
   maxDepth: Volatile<number>
 }
@@ -4316,6 +4402,7 @@ export interface Config {
 | `@deepseek-ai/dsh-client-ui-settings` | — | [`packages/client/ui-settings/src/index.ts`](../packages/client/ui-settings/src/index.ts) |
 | `@deepseek-ai/dsh-client-ui-settings-agent-loop` | — | [`packages/client/ui-settings-agent-loop/src/index.ts`](../packages/client/ui-settings-agent-loop/src/index.ts) |
 | `@deepseek-ai/dsh-client-ui-settings-general` | — | [`packages/client/ui-settings-general/src/index.ts`](../packages/client/ui-settings-general/src/index.ts) |
+| `@deepseek-ai/dsh-client-ui-settings-long-task-monitor` | — | [`packages/client/ui-settings-long-task-monitor/src/index.ts`](../packages/client/ui-settings-long-task-monitor/src/index.ts) |
 | `@deepseek-ai/dsh-client-ui-settings-plugin-inventory` | — | [`packages/client/ui-settings-plugin-inventory/src/index.ts`](../packages/client/ui-settings-plugin-inventory/src/index.ts) |
 | `@deepseek-ai/dsh-client-ui-settings-plugins` | — | [`packages/client/ui-settings-plugins/src/index.ts`](../packages/client/ui-settings-plugins/src/index.ts) |
 | `@deepseek-ai/dsh-client-ui-settings-shell` | — | [`packages/client/ui-settings-shell/src/index.ts`](../packages/client/ui-settings-shell/src/index.ts) |
@@ -4452,6 +4539,7 @@ export interface Config {
 | `@deepseek-ai/dsh-session-format-v1-to-v2` | — | [`packages/session/session-format-v1-to-v2/src/index.ts`](../packages/session/session-format-v1-to-v2/src/index.ts) |
 | `@deepseek-ai/dsh-session-format-v2-to-v3` | — | [`packages/session/session-format-v2-to-v3/src/index.ts`](../packages/session/session-format-v2-to-v3/src/index.ts) |
 | `@deepseek-ai/dsh-session-format-v3-to-v4` | — | [`packages/session/session-format-v3-to-v4/src/index.ts`](../packages/session/session-format-v3-to-v4/src/index.ts) |
+| `@deepseek-ai/dsh-session-format-v4-to-v5` | — | [`packages/session/session-format-v4-to-v5/src/index.ts`](../packages/session/session-format-v4-to-v5/src/index.ts) |
 | `@deepseek-ai/dsh-session-snapshot` | — | [`packages/test-support/session-snapshot/src/index.ts`](../packages/test-support/session-snapshot/src/index.ts) |
 | `@deepseek-ai/dsh-session-telemetry` | — | [`packages/session/session-telemetry/src/index.ts`](../packages/session/session-telemetry/src/index.ts) |
 | `@deepseek-ai/dsh-session-title-llm` | — | [`packages/session/session-title-llm/src/index.ts`](../packages/session/session-title-llm/src/index.ts) |

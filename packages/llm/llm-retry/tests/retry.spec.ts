@@ -225,31 +225,22 @@ describe('provider-routed retry policy', () => {
     })
   })
 
-  it('retries an EMPTY_RESPONSE error finish under the default retryable codes', async () => {
-    vi.useFakeTimers()
+  it('lets the agent loop recover EMPTY_RESPONSE before provider retry scheduling', async () => {
     const adapter = new ScriptedAdapter([
       emptyCompletion(),
       textResponse('recovered'),
     ])
-    // No retryableCodes override: this proves the default policy covers the
-    // adapters' empty-completion classification end to end (finish-chunk error
-    // delivery, not a thrown stream error).
+    // The loop's one-shot degenerate-response recovery takes precedence even
+    // when the provider retry policy also lists EMPTY_RESPONSE.
     ;({ ctx: context } = await harness(adapter))
     const agent = await context.agentLoop.create(SessionId('retry-empty-response'), { provider: 'mock', model: 'mock' })
-    const scheduled = waitForRetry(context, agent, 1)
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
-    const event = await scheduled
-    expect(event.data.failure).toEqual({
-      message: 'model returned a completed response with no content',
-      code: EMPTY_RESPONSE_CODE,
-    })
-
-    const idle = waitForIdle(context, agent)
-    await vi.advanceTimersByTimeAsync(500)
-    await idle
+    await waitForIdle(context, agent)
 
     expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toHaveLength(0)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
     expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message').map(event => ({
       turn: event.data.turn,
       step: event.data.step,
@@ -342,6 +333,48 @@ describe('provider-routed retry policy', () => {
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'busy three', code: 'SERVER' } } },
     })
+  })
+
+  it('uses a TIMEOUT-specific 15s, 30s, 60s budget without changing route backoff', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter([
+      new LlmError('timeout one', 'TIMEOUT'),
+      new LlmError('timeout two', 'TIMEOUT'),
+      new LlmError('timeout three', 'TIMEOUT'),
+      new LlmError('timeout four', 'TIMEOUT'),
+    ])
+    ;({ ctx: context } = await harness(adapter, {
+      mock: normalConfig({
+        maxRetries: 5,
+        backoff: { initialDelayMs: 8_550, maxDelayMs: 8_550, jitterRatio: 0 },
+        failureOverrides: {
+          TIMEOUT: {
+            maxRetries: 3,
+            backoff: { initialDelayMs: 15_000, maxDelayMs: 60_000, jitterRatio: 0 },
+          },
+        },
+      }),
+    }))
+    const agent = await context.agentLoop.create(SessionId('retry-timeout-override'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await vi.runAllTimersAsync()
+    await idle
+
+    expect(adapter.requests).toHaveLength(4)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry').map(event => ({
+      retry: event.data.retry,
+      maxRetries: event.data.mode === 'normal' ? event.data.maxRetries : undefined,
+      delayMs: event.data.delayMs,
+    }))).toEqual([
+      { retry: 1, maxRetries: 3, delayMs: 15_000 },
+      { retry: 2, maxRetries: 3, delayMs: 30_000 },
+      { retry: 3, maxRetries: 3, delayMs: 60_000 },
+    ])
   })
 
   it('accepts the zero-delay lower jitter bound', async () => {

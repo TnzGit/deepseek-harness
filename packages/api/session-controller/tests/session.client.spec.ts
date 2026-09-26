@@ -82,6 +82,26 @@ describe('Session open', () => {
     expect(session.eventSource.getSnapshot().change).toMatchObject({ kind: 'replace' })
   })
 
+  it('requests a small initial mobile tail while keeping older-page requests full-sized', async ({ mock, start }) => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+    try {
+      const session = await sessionBench(mock, start, SID)
+      mock.stream(FOLLOW, followScript(history(plainTurn(SessionSeq(6), 1, '新问', '新答'), true)))
+      mock.remote.session.page.mockImplementation(pageRule(history(plainTurn(SessionSeq(0), 0, '旧问', '旧答'))))
+      await session.open()
+      await session.loadOlder()
+      expect(globalThis.matchMedia).toHaveBeenCalledWith('(max-width: 767px)')
+      expect(mock.log.requests(FOLLOW)).toMatchObject([
+        { maxMessages: 50, turnWindow: { minMessages: 3, minTurns: 2 } },
+      ])
+      expect(mock.log.requests(PAGE)).toMatchObject([
+        { maxMessages: 500, turnWindow: { minMessages: 50, minTurns: 2 } },
+      ])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('is idempotent: concurrent opens share one follow, reopening when open is a no-op', async ({ mock, start }) => {
     const session = await sessionBench(mock, start, SID)
     await Promise.all([session.open(), session.open()])
