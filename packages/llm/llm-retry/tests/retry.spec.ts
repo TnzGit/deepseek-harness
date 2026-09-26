@@ -225,31 +225,22 @@ describe('provider-routed retry policy', () => {
     })
   })
 
-  it('retries an EMPTY_RESPONSE error finish under the default retryable codes', async () => {
-    vi.useFakeTimers()
+  it('lets the agent loop recover EMPTY_RESPONSE before provider retry scheduling', async () => {
     const adapter = new ScriptedAdapter([
       emptyCompletion(),
       textResponse('recovered'),
     ])
-    // No retryableCodes override: this proves the default policy covers the
-    // adapters' empty-completion classification end to end (finish-chunk error
-    // delivery, not a thrown stream error).
+    // The loop's one-shot degenerate-response recovery takes precedence even
+    // when the provider retry policy also lists EMPTY_RESPONSE.
     ;({ ctx: context } = await harness(adapter))
     const agent = await context.agentLoop.create(SessionId('retry-empty-response'), { provider: 'mock', model: 'mock' })
-    const scheduled = waitForRetry(context, agent, 1)
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
-    const event = await scheduled
-    expect(event.data.failure).toEqual({
-      message: 'model returned a completed response with no content',
-      code: EMPTY_RESPONSE_CODE,
-    })
-
-    const idle = waitForIdle(context, agent)
-    await vi.advanceTimersByTimeAsync(500)
-    await idle
+    await waitForIdle(context, agent)
 
     expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toHaveLength(0)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
     expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message').map(event => ({
       turn: event.data.turn,
       step: event.data.step,

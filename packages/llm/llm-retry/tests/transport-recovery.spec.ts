@@ -161,7 +161,7 @@ describe('bounded retry through the real DeepSeek HTTP/SSE adapter', () => {
     expect(finalAssistantText(agent)).toBe('recovered response')
   })
 
-  it('retries a wire-valid content-less completion without committing an empty message', async () => {
+  it('recovers a wire-valid content-less completion without committing an empty message', async () => {
     const server = await start(['empty', 'success'], {
       apiKey: 'mock-key',
       successText: 'recovered from empty',
@@ -175,9 +175,10 @@ describe('bounded retry through the real DeepSeek HTTP/SSE adapter', () => {
     await sendAndWait(context, agent)
 
     expect(server.requests).toHaveLength(2)
-    expect(server.requests[0]?.body).toEqual(server.requests[1]?.body)
-    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry').map(event => event.data.failure.code))
-      .toEqual(['EMPTY_RESPONSE'])
+    expect(JSON.stringify(server.requests[1]?.body)).toContain('The previous model attempt ended without producing a usable final answer or tool call.')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toHaveLength(0)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
     expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')
       .map(event => [event.data.turn, event.data.step]))
       .toEqual([[1, 1]])

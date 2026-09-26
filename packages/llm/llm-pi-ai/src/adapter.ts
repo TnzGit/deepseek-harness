@@ -352,14 +352,6 @@ export class PiAiAdapter extends LlmAdapter {
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
     const streamFirstChunkTimeoutMs = profile.streamFirstChunkTimeoutMs
-    const containsImage = options.messages.some(message => contentHasImage(message.content))
-    if (containsImage && !model.input.includes('image')) {
-      throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
-    }
-    const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
-    if (containsImage && attachments === undefined) {
-      throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
-    }
     const onReplayDegrade = (reason: string): void => {
       this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
     }
@@ -384,6 +376,14 @@ export class PiAiAdapter extends LlmAdapter {
       let pendingUsage: StreamChunk | undefined
 
       try {
+        const containsImage = options.messages.some(message => contentHasImage(message.content))
+        if (containsImage && !model.input.includes('image')) {
+          throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
+        }
+        const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
+        if (containsImage && attachments === undefined) {
+          throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+        }
         const context = attachments === undefined
           ? toPiContext(options, undefined, onReplayDegrade)
           : await toPiContext({ ...options, signal: watchdog.signal }, {
