@@ -22,7 +22,7 @@ async function assembledBashGuidance(): Promise<string> {
     if (section === undefined) throw new Error('tool:bash prompt section was not registered')
     return section.text
   } finally {
-    await ctx.dispose()
+    await ctx.fiber.dispose()
   }
 }
 

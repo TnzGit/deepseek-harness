@@ -2,7 +2,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type {} from '@deepseek-ai/cordis-plugin-loader'
 import {
   SessionTitleProviderId,
   type SessionTitleAutomaticMode,
@@ -17,6 +16,13 @@ import type { SessionTitleLlmConfig } from '@deepseek-ai/dsh-session-title-llm'
 
 export const name = 'session-title-first-prompt-llm'
 export const inject = ['sessionTitle', 'llm', 'sessions']
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /** Loader committed one or more schema-declared volatile config paths. */
+    'loader/volatile-update'(paths: readonly (readonly string[])[]): void
+  }
+}
 
 interface LiveValue<T> {
   get(): T
