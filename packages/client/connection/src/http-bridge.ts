@@ -44,10 +44,9 @@ function preferredJsonCompression(header: string | string[] | undefined): JsonCo
 
 function isJsonResponse(response: Response): boolean {
   const contentType = response.headers.get('content-type')?.toLowerCase()
-  return contentType !== undefined
-    && /^application\/(?:[a-z0-9!#export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
-
-interface BridgeServerResponse {^_.+-]+\+)?json(?:\s*;|\s*$)/.test(contentType)
+  if (contentType === undefined) return false
+  const mediaType = contentType.split(';', 1)[0]?.trim()
+  return mediaType === 'application/json' || mediaType?.endsWith('+json') === true
 }
 
 function varyByEncoding(headers: Record<string, string>): void {
