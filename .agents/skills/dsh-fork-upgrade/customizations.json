@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "features": [
+    {
+      "id": "released-session-read-and-v5-write",
+      "watch": ["packages/session/session-format-v3-to-v4/", "packages/session/session-format-v4-to-v5/", "packages/session/session-format-catalog/", "packages/session/session-persistence-jsonl/", "packages/core/session/"],
+      "anchors": ["packages/session/session-format-v3-to-v4/src/index.ts", "packages/session/session-format-v4-to-v5/src/migration.ts", "packages/session/session-persistence-jsonl/src/catalog-migration.ts"],
+      "checks": ["pnpm exec vitest run packages/session/session-format-v3-to-v4/tests/migration.spec.ts packages/session/session-format-v4-to-v5/tests/migration.spec.ts packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/v3-restart-migration.spec.ts", "pnpm run test:snapshot"]
+    },
+    {
+      "id": "agent-token-cap-and-compaction-recovery",
+      "watch": ["packages/core/agent-loop/", "packages/compaction/compaction-basic/", "packages/llm/llm-pi-ai/", "packages/client/ui-settings-agent-loop/"],
+      "anchors": ["packages/core/agent-loop/src/max-token-continuation.ts", "packages/compaction/compaction-basic/src/summarizer.ts", "packages/llm/llm-pi-ai/src/adapter.ts"],
+      "checks": ["pnpm exec vitest run packages/core/agent-loop/tests/loop.spec.ts packages/compaction/compaction-basic/tests/compaction-basic.spec.ts packages/llm/llm-pi-ai/tests/adapter.spec.ts packages/client/ui-settings-agent-loop/tests/card.client.spec.tsx"]
+    },
+    {
+      "id": "model-reasoning-and-provider-compatibility",
+      "watch": ["packages/llm/llm-pi-ai/", "packages/llm/llm/"],
+      "anchors": ["packages/llm/llm-pi-ai/src/config.ts", "packages/llm/llm-pi-ai/src/adapter.ts"],
+      "checks": ["pnpm exec vitest run packages/llm/llm-pi-ai/tests/config.spec.ts packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts packages/llm/llm-pi-ai/tests/adapter.spec.ts"]
+    },
+    {
+      "id": "web-history-and-transport",
+      "watch": ["packages/client/connection/", "packages/api/session-controller/"],
+      "anchors": ["packages/client/connection/src/http-bridge.ts", "packages/api/session-controller/src/client/sessions/session.ts"],
+      "checks": ["pnpm exec vitest run packages/client/connection/tests/http-bridge.host.spec.ts packages/api/session-controller/tests/session.client.spec.ts"]
+    },
+    {
+      "id": "trusted-lan-web-policy",
+      "watch": ["packages/bundle/web-app/", "packages/client/connection/src/api-request-trust.ts", "packages/host/webserver/"],
+      "anchors": ["packages/bundle/web-app/src/index.ts", "packages/client/connection/src/api-request-trust.ts"],
+      "checks": ["pnpm exec vitest run packages/bundle/web-app/tests/trusted-hosts.spec.ts packages/client/connection/tests/api-request-trust.host.spec.ts"]
+    },
+    {
+      "id": "minimal-preset-and-long-task-monitor",
+      "watch": ["packages/bundle/web-app/presets/minimal.patch.yml", "packages/core/long-task-monitor/", "packages/client/ui-settings-long-task-monitor/"],
+      "anchors": ["packages/bundle/web-app/presets/minimal.patch.yml", "packages/core/long-task-monitor/src/index.ts", "packages/client/ui-settings-long-task-monitor/src/client/index.ts"],
+      "checks": ["pnpm exec vitest run packages/client/ui-settings-long-task-monitor/tests/card.client.spec.tsx", "pnpm run test:snapshot apps/web/tests/minimal-preset.snapshot.ts"]
+    },
+    {
+      "id": "task-notifications",
+      "watch": ["packages/hooks/hooks-notify/"],
+      "anchors": ["packages/hooks/hooks-notify/src/index.ts", "packages/hooks/hooks-notify/src/notify.ts"],
+      "checks": ["pnpm exec vitest run packages/hooks/hooks-notify/tests/task-end.spec.ts packages/hooks/hooks-notify/tests/notify.spec.ts"]
+    },
+    {
+      "id": "exa-search",
+      "watch": ["packages/web/web-search-exa/"],
+      "anchors": ["packages/web/web-search-exa/src/provider.ts"],
+      "checks": ["pnpm exec vitest run packages/web/web-search-exa/tests/exa.spec.ts packages/web/web-search-exa/tests/egress.spec.ts"]
+    },
+    {
+      "id": "bounded-subagent-admission",
+      "watch": ["packages/subagent/subagent/", "packages/client/ui-settings-subagent/", "packages/bundle/web-app/presets/"],
+      "anchors": ["packages/subagent/subagent/src/run-admission.ts", "packages/client/ui-settings-subagent/src/client/SubagentLimitsFields.tsx"],
+      "checks": ["pnpm exec vitest run packages/subagent/subagent/tests/run-admission.spec.ts packages/client/ui-settings-subagent/tests/card.client.spec.tsx"]
+    },
+    {
+      "id": "failure-specific-llm-retry-and-timeout",
+      "watch": ["packages/llm/llm-retry/", "packages/llm/llm/src/retry-policy.ts", "packages/llm/llm-pi-ai/"],
+      "anchors": ["packages/llm/llm-retry/src/index.ts", "packages/llm/llm/src/retry-policy.ts"],
+      "checks": ["pnpm exec vitest run packages/llm/llm-retry/tests/retry.spec.ts packages/llm/llm/tests/retry-policy.spec.ts packages/llm/llm-pi-ai/tests/adapter.spec.ts"]
+    },
+    {
+      "id": "live-session-retitling",
+      "watch": ["packages/session/session-title/", "packages/session/session-title-first-prompt-llm/"],
+      "anchors": ["packages/session/session-title/src/index.ts", "packages/session/session-title-first-prompt-llm/src/index.ts"],
+      "checks": ["pnpm exec vitest run packages/session/session-title/tests/provider.spec.ts packages/session/session-title-first-prompt-llm/tests/provider.spec.ts"]
+    },
+    {
+      "id": "native-bash-guidance",
+      "watch": ["packages/shell/tool-bash/"],
+      "anchors": ["packages/shell/tool-bash/src/index.ts"],
+      "checks": ["pnpm exec vitest run packages/shell/tool-bash/tests/rtk-guidance.spec.ts"]
+    },
+    {
+      "id": "web-plugin-compatibility",
+      "watch": ["packages/bundle/base/", "packages/client/ui-settings/", "packages/client/ui-settings-general/", "packages/client/ui-settings-models/", "packages/extensions/cordis-client-runner/", "packages/extensions/tool-cordis/", "apps/web/tests/plugin-config.e2e.ts"],
+      "anchors": ["packages/bundle/base/cordis.patch.yml", "packages/client/ui-settings/src/client/index.ts"],
+      "checks": ["pnpm exec vitest run apps/web/tests/plugin-config.e2e.ts packages/client/ui-settings/tests/plugin.client.spec.ts packages/client/ui-settings-general/tests/apply.client.spec.ts"]
+    }
+  ],
+  "localOnly": [
+    "Web profile package.json, pnpm-lock.yaml, cordis.patch.yml, and local plugin patches under ~/.dsh/profiles/web",
+    "LaunchAgent bind 0.0.0.0, LAN/Tailscale no-auth policy, and trusted-LAN admin settings",
+    "Exa overlay and EXA_API_KEY / model API keys in local environment only",
+    "Global DSH Superpowers skills, Graft MCP config/index, and local plugin packages",
+    "Production Session backups and old-format read smoke before any restart"
+  ]
+}
