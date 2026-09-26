@@ -1,52 +1,92 @@
+---
+description: "当 agent 回合停止或目标完成时发送可配置的任务结束 webhook 通知，同时不改变模型上下文。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-hooks-notify
 
 [English](README.md) | 中文
 
-任务结束 webhook 通知器。当 agent 回合停止或目标完成时，向配置的端点（通常是局域网内会播放提示音的设备）POST 一个 JSON 载荷。它是一个函数/命名空间插件，不依赖任何必需服务；全部配置存放在 `hooks-notify` 设置命名空间（`ctx.settings`），每个值都能在配置界面实时修改，无需重启。
+## 概述
 
-## 触发点
+`dsh-hooks-notify` 会在 agent 回合停止或目标完成时发送一个小型 JSON webhook。它默认关闭，通过 volatile 配置支持 Settings 实时修改，而且发送过程不会阻塞 agent 循环。适合连接局域网通知服务、手机桥接或类似的任务完成提醒；其设计取舍是宁可漏掉一次通知，也不重试或拖慢模型工作。
 
-| 触发点 | 来源 | 何时触发 |
+## 目录
+
+- [使用本包](#use-this-package)
+- [理解实现](#understand-the-implementation)
+- [进一步探索](#further-exploration)
+- [模型体验](#model-experience)
+- [已知限制与延期工作](#known-limitations-and-deferred-work)
+
+-----
+
+<a id="use-this-package"></a>
+## 使用本包
+
+基础组合已经挂载本插件。只有启用 `hooks-notify` 配置后才会发送 webhook，因此默认不会产生通知。所有字段都是 volatile；在 Settings 中修改后无需重启即可影响正在运行的插件。
+
+| 字段 | 默认值 | 含义 |
 |---|---|---|
-| `turn-end`（默认） | `agent/turn-stopping` | agent 每次回合停止时，包括停下来向用户提问的停止。 |
-| `goal-complete` | `goal/change` 会话事件 | 当前目标的 phase 变为 `complete` 时。 |
-| `both` | 以上两者 | 任一事实都通知。 |
+| `enabled` | `false` | 总开关 |
+| `url` | `http://192.168.10.111:18473/notify` | 绝对 HTTP(S) 端点 |
+| `trigger` | `turn-end` | `turn-end`、`goal-complete` 或 `both` |
+| `message` | `任务完成` | 支持 `{{cwd}}`、`{{session}}`、`{{turn}}`、`{{goal}}` 的模板 |
+| `sound` | `Glass` | 原样转发的设备音效名称 |
+| `repeat` | `1` | 正整数重复次数 |
+| `timeoutMs` | `5000` | 发送截止时间（毫秒） |
 
-按契约，发送是分离式的：循环永远不会等待端点；通知不做重试；失败（网络错误、超时、非 2xx 响应）只是一条被包含的警告。重定向在联系目标之前就被拒绝，会话信息不会跟随重定向转发。每次请求最多等待 `timeoutMs`。
+生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-hooks-notify)是所有字段的穷尽式参考。
 
-## 配置
+每次请求都以 `application/json` 执行 `POST`，请求体固定为：
 
-所有键都是可选的；下面的 schema 默认值随基础组合行一起发布。
-
-| 键 | 默认值 | 含义 |
-|---|---|---|
-| `enabled` | `false` | 总开关。为 false 时不发送任何通知，也不注册监听器。 |
-| `url` | `http://192.168.10.111:18473/notify` | 接收 JSON 载荷的通知端点。必须是绝对的 http(s) URL，否则产生该值的写入会被拒绝。 |
-| `trigger` | `turn-end` | 哪种任务结束会通知：`turn-end`、`goal-complete` 或 `both`。修改后监听器会实时重新接线。 |
-| `message` | `任务完成` | 消息模板。`{{cwd}}`、`{{session}}`、`{{turn}}`、`{{goal}}` 会替换为本次任务的事实；未知占位符原样保留。 |
-| `sound` | `Glass` | 原样转发的设备音效名称。 |
-| `repeat` | `1` | 正整数；设备重复播放提示音的次数。 |
-| `timeoutMs` | `5000` | 正整数；等待端点响应的时间上界。 |
-
-请求体固定为 `{ message, sound, repeat }`，以 `application/json` 发送。
-
-```yaml
-- id: hooks-notify
-  name: '@deepseek-ai/dsh-hooks-notify'
+```json
+{
+  "message": "任务完成",
+  "sound": "Glass",
+  "repeat": 1
+}
 ```
 
-上面这一行是 `hooks-notify` 设置节的组合层：用户层的修改会在下一次任务结束前生效，无需重启——插件每次通知都读取已解析的节，并在 `trigger` 变化时重新注册监听器。
+发送与任务边界脱离，不做重试。网络错误、超时、重定向和非 2xx 响应只记录受控警告。重定向会被拒绝，避免会话信息被转发到另一个来源。
 
-## Model Experience
+-----
 
-无，因为通知只向外发送；不添加任何会话事件、上下文消息或提示词节，发送失败也永远不会进入模型请求。
+<a id="understand-the-implementation"></a>
+## 理解实现
+
+<details>
+<summary>实现细节——点击展开</summary>
+
+`src/index.ts` 负责触发点接线和实时配置。`agent/turn-stopping` 以全局方式观察所有 agent scope；目标完成则从已提交的 `goal/change` Session 事件观察。修改 `enabled` 或 `trigger` 只会重接这些监听器；其他 volatile 字段在每次发送前即时读取，因此修改消息或端点不会造成监听器抖动。
+
+`src/notify.ts` 负责纯变量投影、模板替换和有时限的 HTTP POST。插件会跟踪正在发送的请求；dispose 时主动中止并等待其 Promise 收敛，因此不会有迟到回调超过 fiber 生命周期。
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## 进一步探索
+
+- [agent-loop](../../core/agent-loop/README.zh.md) — 回合停止边界的所有者。
+- [goal](../../goal/goal/README.zh.md) — 持久目标完成变更的所有者。
+- [settings](../../settings/settings/README.zh.md) — 把 volatile 插件配置投影成 Settings 表单。
+
+-----
+
+<a id="model-experience"></a>
+## 模型体验
+
+无，因为任务结束通知只是 Host 向外发送的副作用，不会增加提示词、消息、工具 schema、工具结果或提供方请求。
 
 #### KV Cache effect（KV Cache 影响）
 
-无；此包既不组装也不发送提供方请求。
+无；本包既不组装也不改变模型输入。
 
-## Known Limitations and Deferred Work（已知限制与暂缓工作）
+<a id="known-limitations-and-deferred-work"></a>
+## 已知限制与延期工作
 
-- **回合结束包含交互式停止：** agent 以 `ask_user_question` 或其他面向用户的询问收尾的暂停也算一次回合结束并触发通知。区分停止原因需要 harness 目前还不存在的信号。
-- **没有重试或死信队列：** 失败的通知只警告一次即丢弃。
-- **目标完成跟随持久事件流：** 通知由已提交的 `goal/change` 事件驱动，进程停机期间完成的目标不会补发通知。
+- **回合结束包含交互式停止：** 因向用户提问而停止的回合也属于 `turn-end`。
+- **没有重试或死信队列：** 失败通知只警告一次后丢弃。
+- **没有补发：** 进程停机期间发生的任务结束不会在重启后回放通知。

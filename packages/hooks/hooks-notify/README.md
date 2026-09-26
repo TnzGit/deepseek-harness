@@ -1,52 +1,92 @@
+---
+description: "Send configurable task-end webhook notifications when an agent turn stops or a goal completes, without changing model context."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-hooks-notify
 
 English | [中文](README.zh.md)
 
-Task-end webhook notifier. When an agent turn stops or a goal completes, it POSTs a JSON payload to a configured endpoint — typically a LAN device that plays a sound. It is a function/namespace plugin with no required services; its entire configuration lives in the `hooks-notify` settings namespace (`ctx.settings`), so every value edits live from configuration surfaces without a restart.
+## Summary
 
-## Triggers
+`dsh-hooks-notify` sends a small JSON webhook when an agent turn stops or a goal completes. It ships disabled, supports live Settings edits through volatile configuration, and never blocks the agent loop on delivery. Use it for a LAN notification service, phone bridge, or similar task-completion signal when missed notifications are preferable to retrying or delaying model work.
 
-| Trigger | Source | Fires |
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+
+-----
+
+<a id="use-this-package"></a>
+## Use this package
+
+The base composition already mounts the plugin. It is disabled until its `hooks-notify` configuration is enabled, so no webhook is sent by default. All fields are volatile: Settings edits reach the running plugin without a restart.
+
+| Field | Default | Meaning |
 |---|---|---|
-| `turn-end` (default) | `agent/turn-stopping` | Every time an agent turn stops, including stops that end in a question to the user. |
-| `goal-complete` | `goal/change` session events | When the current goal's phase becomes `complete`. |
-| `both` | both of the above | Either fact notifies. |
+| `enabled` | `false` | Master switch |
+| `url` | `http://192.168.10.111:18473/notify` | Absolute HTTP(S) endpoint |
+| `trigger` | `turn-end` | `turn-end`, `goal-complete`, or `both` |
+| `message` | `任务完成` | Template with `{{cwd}}`, `{{session}}`, `{{turn}}`, and `{{goal}}` |
+| `sound` | `Glass` | Device sound name forwarded verbatim |
+| `repeat` | `1` | Positive repeat count |
+| `timeoutMs` | `5000` | Delivery deadline in milliseconds |
 
-Delivery is detached by contract: the loop never waits for the endpoint, notifications are not retried, and a failure (network error, timeout, non-2xx answer) is a contained warning. Redirects are refused before the target is contacted so session details cannot follow one. Each request waits at most `timeoutMs`.
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-hooks-notify) is the exhaustive field reference.
 
-## Config
+Each request is `POST`ed as `application/json` with this body:
 
-All keys are optional; the schema defaults below ship in the base composition row.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `enabled` | `false` | Master switch. While false nothing is sent and no listeners are registered. |
-| `url` | `http://192.168.10.111:18473/notify` | Notify endpoint receiving the JSON payload. Must be an absolute http(s) URL; anything else refuses the write that produced it. |
-| `trigger` | `turn-end` | Which task ends notify: `turn-end`, `goal-complete`, or `both`. Changes re-wire the listeners live. |
-| `message` | `任务完成` | Message template. `{{cwd}}`, `{{session}}`, `{{turn}}`, and `{{goal}}` substitute the ended task's facts; unknown placeholders stay verbatim. |
-| `sound` | `Glass` | Device sound name forwarded verbatim. |
-| `repeat` | `1` | Positive integer; how many times the device repeats the sound. |
-| `timeoutMs` | `5000` | Positive integer; bounded wait for the endpoint's answer. |
-
-The body is always `{ message, sound, repeat }` posted as `application/json`.
-
-```yaml
-- id: hooks-notify
-  name: '@deepseek-ai/dsh-hooks-notify'
+```json
+{
+  "message": "任务完成",
+  "sound": "Glass",
+  "repeat": 1
+}
 ```
 
-The row above is the base layer of the `hooks-notify` Settings section: a user-layer edit reaches the next task end without a restart, because the plugin reads the resolved section per notification and re-registers its listeners when `trigger` changes.
+Delivery is detached from the task boundary. The plugin does not retry. Network errors, timeouts, redirects, and non-2xx responses are contained as warnings. Redirects are refused so session details cannot be forwarded to another origin.
 
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+`src/index.ts` owns trigger wiring and live configuration. `agent/turn-stopping` is observed globally across agent scopes; goal completion is observed from committed `goal/change` Session events. Changing `enabled` or `trigger` rewires only those listeners. Other volatile fields are read immediately before each delivery, so message or endpoint edits take effect without listener churn.
+
+`src/notify.ts` owns pure variable projection, template substitution, and the bounded HTTP POST. In-flight deliveries are tracked by the plugin: disposal aborts them and drains their promises so no late callback outlives the fiber.
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+- [agent-loop](../../core/agent-loop/README.md) — owns the turn-stopping boundary.
+- [goal](../../goal/goal/README.md) — owns durable goal completion changes.
+- [settings](../../settings/settings/README.md) — projects volatile plugin configuration into Settings forms.
+
+-----
+
+<a id="model-experience"></a>
 ## Model Experience
 
-None, as notifications travel outbound only; no session event, context message, or prompt section is added, and delivery failures never reach a model request.
+None, as task-end notifications are outbound Host effects and add no prompt, message, tool schema, tool result, or provider request.
 
 #### KV Cache effect
 
-None; this package neither assembles nor sends a provider request.
+None; this package neither assembles nor changes model input.
 
+<a id="known-limitations-and-deferred-work"></a>
 ## Known Limitations and Deferred Work
 
-- **Turn end includes interactive stops:** an agent pause that ends in `ask_user_question` or another user-facing ask counts as a turn end and notifies. Distinguishing stop reasons needs a harness signal that does not exist yet.
-- **No retry or dead-letter:** a failed notification is warned once and dropped; there is no queue.
-- **Goal completion follows the durable event stream:** notifications fire from committed `goal/change` events, so a goal completed while the process was down does not notify retroactively.
+- **Turn end includes interactive stops:** a turn that stops to ask the user a question also qualifies as `turn-end`.
+- **No retry or dead-letter queue:** a failed notification is warned once and dropped.
+- **No retroactive delivery:** task ends that occur while the process is down are not replayed when it restarts.
