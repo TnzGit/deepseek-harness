@@ -61,10 +61,11 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     `  name: ${pathToFileURL(join(dir, 'reader.mjs')).href}`,
     `  inject: [${WEB_STARTUP_SERVICE}]`,
     '  config:',
-    "    host: !!js ctx.webStartup.host ?? '127.0.0.1'",
+    "    host: !!js ctx.webStartup.host ?? '0.0.0.0'",
     '    openBrowser: !!js ctx.webStartup.openBrowser',
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    allowUnauthenticated: true',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -107,7 +108,7 @@ describe('web command-line provider', () => {
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
     })
-    expect(observed.readerConfig).toEqual(values)
+    expect(observed.readerConfig).toEqual({ ...values, allowUnauthenticated: true })
     expect(observed.exits).toEqual([])
   })
 
@@ -115,10 +116,11 @@ describe('web command-line provider', () => {
     const { values, observed } = await bootProvider([])
     expect(values).toEqual({ openBrowser: true, trustedHosts: [] })
     expect(observed.readerConfig).toEqual({
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       openBrowser: true,
       port: 3080,
       trustedHosts: [],
+      allowUnauthenticated: true,
     })
   })
 
@@ -140,18 +142,7 @@ describe('web command-line provider', () => {
     expect(observed.exits).toEqual([1])
   })
 
-  it('rejects the all-interfaces host without explicit LAN opt-in', async () => {
-    vi.stubEnv('DSH_ALLOW_LAN', '0')
-    vi.stubEnv('DSH_ALLOW_REMOTE_ADMIN', '0')
-    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(observed.out).toContain('--host 0.0.0.0 requires explicit LAN opt-in')
-    expect(values).toBeUndefined()
-    expect(observed.readerConfig).toBeUndefined()
-    expect(observed.exits).toEqual([1])
-  })
-
-  it('allows the all-interfaces host with DSH_ALLOW_LAN=1', async () => {
-    vi.stubEnv('DSH_ALLOW_LAN', '1')
+  it('allows the all-interfaces host and no-login access without environment opt-ins', async () => {
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
     expect(values).toEqual({
       host: '0.0.0.0',
@@ -163,14 +154,13 @@ describe('web command-line provider', () => {
       openBrowser: true,
       port: 3080,
       trustedHosts: [],
+      allowUnauthenticated: true,
     })
     expect(observed.exits).toEqual([])
   })
 
-  it('accepts DSH_ALLOW_REMOTE_ADMIN=1 as the legacy LAN-bind alias', async () => {
-    vi.stubEnv('DSH_ALLOW_REMOTE_ADMIN', '1')
-    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(values?.host).toBe('0.0.0.0')
-    expect(observed.exits).toEqual([])
+  it('keeps no-login access when binding is explicitly restricted to loopback', async () => {
+    const local = await bootProvider(['--host', '127.0.0.1'])
+    expect(local.observed.readerConfig).toMatchObject({ host: '127.0.0.1', allowUnauthenticated: true })
   })
 })

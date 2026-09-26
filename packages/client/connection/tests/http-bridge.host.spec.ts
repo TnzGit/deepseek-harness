@@ -29,7 +29,7 @@ function captureResponse(): {
       this.writableEnded = true
       return this
     },
-  }) as unknown as ServerResponse
+  }) as ServerResponse
   return {
     response,
     result: () => ({ status, headers, body: Buffer.concat(chunks) }),

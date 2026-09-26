@@ -3,6 +3,7 @@
 import type { Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { freezeMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { AgentRecoveryState } from './recovery-projection.ts'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -116,4 +117,17 @@ export function withDegenerateRecovery(
     return replayable
   }
   return [...replayable, recoveryMessage(step.data.turn, step.data.step)]
+}
+
+/** Reconstruct the retry prompt from projected recovery coordinates without scanning Session history. */
+export function withProjectedDegenerateRecovery(
+  state: AgentRecoveryState,
+  messages: readonly Message[],
+): Message[] {
+  const replayable = messages.filter(message => !isRepeatedPunctuationReasoning(message))
+  const step = state.step
+  const recovery = state.degenerate
+  if (step === null || recovery === null || recovery.action !== 'retry'
+    || recovery.turn !== step.turn || recovery.step !== step.step) return replayable
+  return [...replayable, recoveryMessage(step.turn, step.step)]
 }

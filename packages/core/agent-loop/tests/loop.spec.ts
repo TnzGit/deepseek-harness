@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createAssistantMessage, createUserMessage, DEGENERATE_RESPONSE_CODE, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent, type AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
@@ -354,6 +354,12 @@ describe('agent loop', () => {
       continuationStep: 2,
       attempt: 1,
     })
+    const restored = Session.fromRestore(
+      agent.session.id, agent.session.snapshotEvents(), agent.session.header,
+      agent.session.inheritedEventCount, 'detached',
+    )
+    expect(ctx.sessionProjections.stateOf(restored, 'agentRecovery'))
+      .toEqual(ctx.sessionProjections.stateOf(agent.session, 'agentRecovery'))
     expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
       .toMatchObject({ data: { reason: { kind: 'completed' } } })
   })
@@ -1732,10 +1738,8 @@ describe('agent loop', () => {
     }])
   })
 
-  it('appends an empty completion anchor for a normal stop with no usage', async () => {
-    // A clean content-less call stays absent from derived messages but remains
-    // a durable successful-call boundary for replay consumers.
-    const adapter = new MockAdapter([[{ type: 'finish', reason: { kind: 'stop' } }]])
+  it('retries a content-less stop with no usage without adding an empty assistant message', async () => {
+    const adapter = new MockAdapter([[{ type: 'finish', reason: { kind: 'stop' } }], textResponse('recovered')])
     const ctx = await harness(adapter)
     const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
 
@@ -1746,6 +1750,7 @@ describe('agent loop', () => {
     await waitForIdle(ctx, agent)
 
     expect(reasons).toEqual([{ kind: 'completed' }])
+    expect(agent.session.snapshotEvents().filter(e => e.type === 'agent/degenerate-response')).toHaveLength(1)
     const assistant = agent.session.snapshotEvents().find(e => e.type === 'assistant/message')!
     expect(assistant.type === 'assistant/message' && assistant.data).toMatchObject({
       turn: 1,
@@ -1753,18 +1758,12 @@ describe('agent loop', () => {
       message: {
         id: expect.any(String) as unknown,
         role: 'assistant',
-        content: [],
+        content: [{ type: 'text', text: 'recovered' }],
         source: { kind: 'model', provider: 'mock', model: 'mock' },
       },
     })
     expect(assistant.sourceEventSeqs).toBeUndefined()
-    expect(assistant.type === 'assistant/message' ? assistant.data.stream.length : 0).toBe(1)
-    expect(agent.session.deriveMessages().slice(1)).toEqual([{
-      id: expect.any(String) as unknown,
-      role: 'user',
-      content: [{ type: 'text', text: 'go' }],
-      source: { kind: 'user' },
-    }])
+    expect(agent.session.deriveMessages().slice(1).map(message => message.role)).toEqual(['user', 'assistant'])
   })
 
   it('keeps safe max-tokens assistant content while dropping truncated tool calls', async () => {

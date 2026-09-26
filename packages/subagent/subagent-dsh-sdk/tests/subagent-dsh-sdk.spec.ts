@@ -684,17 +684,17 @@ describe('dsh-subagent-dsh-sdk provider', () => {
     }
   })
 
-  it('rejects a pre-aborted request through the registered provider before cwd resolution', async () => {
+  it('rejects a pre-aborted request before provider admission or cwd resolution', async () => {
     const ctx = await setup()
     const controller = new AbortController()
-    controller.abort()
+    controller.abort(new Error('cancel before admission'))
     const parent = { id: 'parent', session: { header: {} } } as unknown as Agent
     await expect(ctx.subagents.start('dsh-sdk', {
       label: 'p',
       prompt: [{ type: 'text' as const, text: 'p' }],
       parent,
       signal: controller.signal,
-    })).rejects.toThrow('subagent request was aborted before the SDK child started')
+    })).rejects.toThrow('cancel before admission')
     await ctx.fiber.dispose()
   })
 

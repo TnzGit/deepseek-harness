@@ -26,7 +26,7 @@ function fakeParent(id = 'parent-1', origin?: 'subagent'): Agent {
   return {
     id: SessionId(id),
     session: { header: { id: SessionId(id), ...origin === undefined ? {} : { origin } } },
-  } as unknown as Agent
+  } as Agent
 }
 
 const ALL_CAPS: SubagentCapabilities = { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true }

@@ -44,6 +44,8 @@ flowchart LR
   cfg --> plugin_dsh_base_agent_default_model
   plugin_dsh_base_jobs["jobs<br/>@deepseek-ai/dsh-jobs-local"]
   cfg --> plugin_dsh_base_jobs
+  plugin_dsh_base_long_task_monitor["long-task-monitor<br/>@deepseek-ai/dsh-long-task-monitor"]
+  cfg --> plugin_dsh_base_long_task_monitor
   plugin_dsh_base_llm_retry["llm-retry<br/>@deepseek-ai/dsh-llm-retry"]
   cfg --> plugin_dsh_base_llm_retry
   plugin_dsh_base_config_editor["config-editor<br/>@deepseek-ai/dsh-config-editor"]
@@ -172,6 +174,8 @@ flowchart LR
   cfg --> plugin_dsh_base_tool_ralph
   plugin_dsh_base_repeat_tool_reminder["repeat-tool-reminder<br/>@deepseek-ai/dsh-repeat-tool-reminder"]
   cfg --> plugin_dsh_base_repeat_tool_reminder
+  plugin_dsh_base_hooks_notify["hooks-notify<br/>@deepseek-ai/dsh-hooks-notify"]
+  cfg --> plugin_dsh_base_hooks_notify
   plugin_dsh_base_web["web<br/>@deepseek-ai/dsh-web"]
   cfg --> plugin_dsh_base_web
   plugin_dsh_base_web_search_deepseek["web-search-deepseek<br/>@deepseek-ai/dsh-web-search-deepseek"]
@@ -216,6 +220,7 @@ flowchart LR
 | `plugin-package-inventory-deepseek` | `@deepseek-ai/dsh-plugin-package-inventory-deepseek` |
 | `agent-default-model` | `@deepseek-ai/dsh-agent-default-model` |
 | `jobs` | `@deepseek-ai/dsh-jobs-local` |
+| `long-task-monitor` | `@deepseek-ai/dsh-long-task-monitor` |
 | `llm-retry` | `@deepseek-ai/dsh-llm-retry` |
 | `config-editor` | `@deepseek-ai/dsh-config-editor` |
 | `settings` | `@deepseek-ai/dsh-settings` |
@@ -280,6 +285,7 @@ flowchart LR
 | `tool-goal` | `@deepseek-ai/dsh-tool-goal` |
 | `tool-ralph` | `@deepseek-ai/dsh-tool-ralph` |
 | `repeat-tool-reminder` | `@deepseek-ai/dsh-repeat-tool-reminder` |
+| `hooks-notify` | `@deepseek-ai/dsh-hooks-notify` |
 | `web` | `@deepseek-ai/dsh-web` |
 | `web-search-deepseek` | `@deepseek-ai/dsh-web-search-deepseek` |
 | `web-fetch-http` | `@deepseek-ai/dsh-web-fetch-http` |

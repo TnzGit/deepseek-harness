@@ -100,7 +100,7 @@ interface SessionTitleUserMessage {
 
 ```ts type-equiv
 /** Automatic generation cadence owned by a registered provider. */
-type SessionTitleAutomaticMode = 'first-prompt' | 'all-prompts'
+type SessionTitleAutomaticMode = 'first-prompt' | 'all-prompts' | 'every-nth-prompt'
 ```
 
 ```ts type-equiv
@@ -136,6 +136,12 @@ interface SessionTitleProvider {
   readonly id: SessionTitleProviderId
   /** When new human prompts start automatic generation. */
   readonly automatic: SessionTitleAutomaticMode
+  /**
+   * Eligible-message count between automatic revisions on the
+   * `every-nth-prompt` cadence. Prompt 1 titles immediately, then every
+   * `promptInterval` further prompts regenerate.
+   */
+  readonly promptInterval?: number
   /**
    * Produce one title revision.
    * @param request - message snapshot, current route, session, and cancellation.

@@ -24,6 +24,8 @@ export interface ContextOverflowNumbers {
  * Extract the window size and prompt size from a context-overflow rejection.
  * Recognizes the vLLM/OpenAI-compatible wording ("maximum context length is
  * N tokens … your prompt contains at least M input tokens").
+ * @param detail - provider rejection text.
+ * @returns parsed counts when the format is recognized.
  */
 export function parseContextOverflowNumbers(detail: string): ContextOverflowNumbers | undefined {
   const contextLength = /context (?:length|window) (?:is |of )?(\d{3,})/i.exec(detail)?.[1]
@@ -53,12 +55,19 @@ export const CONTEXT_ADAPT_MAX_ATTEMPTS = 3
 /** Smallest output reservation a clamped retry still considers useful. */
 export const CONTEXT_ADAPT_MIN_OUTPUT_TOKENS = 2048
 
-/** Resolve the context headroom retained across provider token recounts. */
+/** Resolve the context headroom retained across provider token recounts.
+ * @param contextLength - provider context window.
+ * @returns reserved headroom in tokens.
+ */
 export function contextAdaptMargin(contextLength: number): number {
   return Math.max(CONTEXT_ADAPT_MIN_MARGIN_TOKENS, Math.ceil(contextLength * CONTEXT_ADAPT_MARGIN_RATIO))
 }
 
-/** Compute the output cap one adaptive retry should use for a context-overflow rejection. */
+/** Compute the output cap one adaptive retry should use for a context-overflow rejection.
+ * @param detail - provider rejection text.
+ * @param requestedMaxTokens - output reservation rejected by the provider.
+ * @returns smaller cap when an exact provider count allows adaptation.
+ */
 export function adaptMaxTokensForContextOverflow(
   detail: string,
   requestedMaxTokens?: number,
@@ -78,6 +87,8 @@ export function adaptMaxTokensForContextOverflow(
  * Compute the measured input reduction required before compaction may retry a
  * provider-rejected request. Exact provider deficit alone is not enough because
  * token counts can shift between otherwise equivalent calls.
+ * @param detail - provider rejection text.
+ * @returns minimum measured input relief when exact counts are available.
  */
 export function contextOverflowRetryRelief(detail: string): number | undefined {
   const numbers = parseContextOverflowNumbers(detail)

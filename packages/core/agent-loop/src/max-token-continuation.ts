@@ -5,6 +5,7 @@
 import type { ContentBlock, Message, ModelMessageSource } from '@deepseek-ai/dsh-llm'
 import { freezeMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { reasoningDigest, type AgentRecoveryState } from './recovery-projection.ts'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -100,6 +101,16 @@ export function repeatsMaxTokenCheckpoint(
   return currentReasoning !== '' && currentReasoning === reasoningText(previous.data.message.content)
 }
 
+/** Compare the current capped response with the prior continuation digest from projected state. */
+export function repeatsProjectedMaxTokenCheckpoint(
+  state: AgentRecoveryState,
+  turn: number,
+  content: readonly ContentBlock[],
+): boolean {
+  const digest = reasoningDigest(content)
+  return digest !== null && state.continuation?.turn === turn && state.continuation.reasoningDigest === digest
+}
+
 /**
  * Reconstruct the internal prompt for the exact continuation step named by the
  * durable event. The source reasoning is converted to plain assistant text so
@@ -139,5 +150,30 @@ export function withMaxTokenContinuation(
     ),
     ...messages.slice(sourceIndex + 1),
     recoveryMessage(step.data.turn, step.data.step),
+  ]
+}
+
+/** Reconstruct a pending continuation from bounded projected coordinates and current surface messages. */
+export function withProjectedMaxTokenContinuation(
+  state: AgentRecoveryState,
+  messages: readonly Message[],
+): Message[] {
+  const step = state.step
+  const continuation = state.continuation
+  if (step === null || continuation === null
+    || continuation.turn !== step.turn
+    || continuation.continuationStep !== step.step) return [...messages]
+  const source = continuation.sourceMessageId === null
+    ? undefined : messages.find(message => message.id === continuation.sourceMessageId)
+  if (source?.role !== 'assistant') {
+    return [...messages, recoveryMessage(step.turn, step.step)]
+  }
+  const sourceIndex = messages.indexOf(source)
+  const reasoning = reasoningText(source.content)
+  return [
+    ...messages.slice(0, sourceIndex),
+    checkpointMessage(step.turn, step.step, reasoning, source.source),
+    ...messages.slice(sourceIndex + 1),
+    recoveryMessage(step.turn, step.step),
   ]
 }

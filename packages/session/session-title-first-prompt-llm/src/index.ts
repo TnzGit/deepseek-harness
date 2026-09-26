@@ -1,6 +1,7 @@
 /** Model-backed session-title provider with a live configurable cadence. */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
 import {
   SessionTitleProviderId,
@@ -17,23 +18,12 @@ import type { SessionTitleLlmConfig } from '@deepseek-ai/dsh-session-title-llm'
 export const name = 'session-title-first-prompt-llm'
 export const inject = ['sessionTitle', 'llm', 'sessions']
 
-declare module '@deepseek-ai/cordis' {
-  interface Events {
-    /** Loader committed one or more schema-declared volatile config paths. */
-    'loader/volatile-update'(paths: readonly (readonly string[])[]): void
-  }
-}
-
-interface LiveValue<T> {
-  get(): T
-}
-
 /** Required LLM policy plus user-editable automatic title cadence. */
 export interface Config extends SessionTitleLlmConfig {
   /** First prompt only, or periodic retitling after each batch of N further prompts. */
-  readonly mode: LiveValue<'first' | 'every-nth'>
+  readonly mode: Volatile<'first' | 'every-nth'>
   /** Eligible prompts between revisions in every-nth mode. */
-  readonly everyNPrompts: LiveValue<number>
+  readonly everyNPrompts: Volatile<number>
 }
 
 type ConfigInput = SessionTitleLlmConfig & {
@@ -52,7 +42,7 @@ export const Config: z<ConfigInput, Config> = z.object({
   model: SessionTitleLlmConfigFields.model,
   mode: z.union(['first', 'every-nth']).default('first').volatile(),
   everyNPrompts: z.number().step(1).min(1).default(3).volatile(),
-}) as z<ConfigInput, Config>
+})
 
 interface Cadence {
   readonly mode: 'first' | 'every-nth'

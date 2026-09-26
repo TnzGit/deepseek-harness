@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -62,6 +63,8 @@ kind: "package-reference"
 
 `src/notify.ts` 负责纯变量投影、模板替换和有时限的 HTTP POST。插件会跟踪正在发送的请求；dispose 时主动中止并等待其 Promise 收敛，因此不会有迟到回调超过 fiber 生命周期。
 
+不发布不变量伴生入口，因为触发器接线与发送共用同一个插件生命周期。
+
 </details>
 
 -----
@@ -84,9 +87,20 @@ kind: "package-reference"
 
 无；本包既不组装也不改变模型输入。
 
-<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **回合结束包含交互式停止：** 因向用户提问而停止的回合也属于 `turn-end`。
 - **没有重试或死信队列：** 失败通知只警告一次后丢弃。
 - **没有补发：** 进程停机期间发生的任务结束不会在重启后回放通知。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+无。
+
+</details>

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Run `dsh --profile web` to open an interactive browser GUI with chat, model and settings management, and session history. It uses the same model access, tools, and safety defaults as other dsh surfaces. Startup prints an authenticated URL and normally opens it in the default browser; SSH sessions and `--no-open` leave the URL for manual opening. You can change the port and allow extra hosts, but cannot bind all network interfaces. Choose this package for interactive browser work; use `dsh-headless` for one-shot command-line tasks.
+Run `dsh --profile web` to open an interactive browser GUI with chat, model and settings management, and session history. This fork binds all interfaces and admits trusted LAN browsers without login by default. Startup prints a clean URL and normally opens it in the default browser; SSH sessions and `--no-open` leave the URL for manual opening. Use `--host 127.0.0.1` to restrict binding to loopback. Choose this package for interactive browser work; use `dsh-headless` for one-shot command-line tasks.
 
 ## Table of Contents
 
@@ -34,7 +34,7 @@ dsh --profile web
 dsh --profile web --no-open --port 8080
 ```
 
-After startup you see a `dsh web:` line whose root URL carries a fresh process token. Unless `--no-open` or an SSH session suppresses it, the default browser opens that URL, receives a signed cookie, and redirects to the same directory without the token. You know it worked when the page loads and you can chat with the agent. Two failures to expect: if the frontend is not built, startup stops with a build hint (`pnpm run build` in a checkout); if the browser cannot be opened, a credential-free diagnostic prints to stderr while the server keeps running — open the printed startup URL yourself.
+After startup you see a `dsh web:` line with a clean URL; no token exchange or cookie is required by this fork's Web profile. Unless `--no-open` or an SSH session suppresses it, the default browser opens that URL. You know it worked when the page loads and you can chat with the agent. Two failures to expect: if the frontend is not built, startup stops with a build hint (`pnpm run build` in a checkout); if the browser cannot be opened, a diagnostic prints to stderr while the server keeps running — open the printed startup URL yourself.
 
 **Settings → Models** displays **DeepSeek**, using `DEEPSEEK_API_KEY`. The default is `deepseek-official` / `deepseek-flash` (DeepSeek-V41-Flash). The [DeepSeek plugin](../../llm/llm-deepseek/README.md#endpoint-and-wire-format) uses the Messages API.
 
@@ -55,7 +55,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 ### LAN access and trusted hosts
 
-By default the GUI accepts connections from this machine only. A deployment that binds all network interfaces also allows browsers from the LAN, and the printed URL then includes a LAN address; `--trusted-host` adds extra hosts in either case. Host and Origin checks control reachability, while the token exchange authenticates every Host API method and WebSocket stream. The LAN addresses are sampled once at startup, so a network change later is not picked up — restart the GUI to re-advertise.
+This fork's Web profile binds `0.0.0.0` and skips browser login by default. The printed URL includes a sampled LAN address; `--trusted-host` can add extra authorities. Host and Origin checks remain active, but they are not identity authentication: every device that can reach a trusted Host authority has operator access to settings, credentials, and local operations. Do not expose this port to the public internet. LAN and Tailscale IPv4 addresses are sampled once at startup, so restart after an interface change.
 
 ### Running over SSH
 
@@ -151,7 +151,7 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Only the handoff start is observable** — the GUI reports that the browser was asked to open, not that it actually opened; a later browser exit is never reported, and the printed URL is your manual fallback.
 - **SSH sessions keep the URL but skip the browser handoff** — the printed URL names the remote host's loopback endpoint; the SSH client or editor must expose and open the local forwarded address.
 - **`BROWSER` overrides only come from the environment** — a discovered `.env` cannot set `BROWSER`; only an inherited value can choose the executable for the automatic handoff.
-- **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
+- **LAN access has no browser login in this fork** — all-interface binding and operator access are defaults; use `--host 127.0.0.1` to restrict the listener, or a host firewall to limit clients.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/core/long-task-monitor/README.md
+/:
+  en: b63514fa81c7b968
+  zh: d68aa928c367ebae
+/deepseek-ai-dsh-long-task-monitor:
+  en: 1139a4e9038b29cc
+  zh: d22bf24298045670
+/deepseek-ai-dsh-long-task-monitor/summary:
+  en: 800ccc524f49de01
+  zh: be61e1f584e36d64
+/deepseek-ai-dsh-long-task-monitor/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-long-task-monitor/use-this-package:
+  en: 1c93162296c6ebe0
+  zh: 9cb909726669b00f
+/deepseek-ai-dsh-long-task-monitor/understand-the-implementation:
+  en: eb12ff3a17044aa8
+  zh: 79d75dcd4ff28e4d
+/deepseek-ai-dsh-long-task-monitor/further-exploration:
+  en: 881e7a217551abbe
+  zh: 91f965940c0b652f
+/deepseek-ai-dsh-long-task-monitor/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-long-task-monitor/model-experience/progress-checkpoint:
+  en: 8461e10f01fa099f
+  zh: e2f8ba155b71a5e6
+/deepseek-ai-dsh-long-task-monitor/model-experience/progress-checkpoint/what-the-model-sees:
+  en: 91a80b0f0c6d08f9
+  zh: fc00a8cbfc4c523b
+/deepseek-ai-dsh-long-task-monitor/model-experience/progress-checkpoint/token-effect:
+  en: 09fa5a7e0c3a9952
+  zh: d97f366b50c8e119
+/deepseek-ai-dsh-long-task-monitor/model-experience/progress-checkpoint/kv-cache-effect:
+  en: 0dc0d7ddbb2def00
+  zh: 7458bee91c5e9e70
+/deepseek-ai-dsh-long-task-monitor/known-limitations-and-deferred-work:
+  en: 4556dad4878268ee
+  zh: b66319545e652ffb
+/deepseek-ai-dsh-long-task-monitor/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: e88aeb617ffb74ea

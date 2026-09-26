@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -62,6 +63,8 @@ Delivery is detached from the task boundary. The plugin does not retry. Network 
 
 `src/notify.ts` owns pure variable projection, template substitution, and the bounded HTTP POST. In-flight deliveries are tracked by the plugin: disposal aborts them and drains their promises so no late callback outlives the fiber.
 
+No invariant companion is published because trigger wiring and delivery share one plugin lifecycle.
+
 </details>
 
 -----
@@ -84,9 +87,20 @@ None, as task-end notifications are outbound Host effects and add no prompt, mes
 
 None; this package neither assembles nor changes model input.
 
-<a id="known-limitations-and-deferred-work"></a>
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **Turn end includes interactive stops:** a turn that stops to ask the user a question also qualifies as `turn-end`.
 - **No retry or dead-letter queue:** a failed notification is warned once and dropped.
 - **No retroactive delivery:** task ends that occur while the process is down are not replayed when it restarts.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

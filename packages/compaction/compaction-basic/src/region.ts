@@ -158,6 +158,10 @@ export function selectCompactableRange(
  * Halve one failed compaction span at the nearest earlier balanced boundary.
  * This gives a max-token or degenerate summary a monotonically smaller input
  * instead of replaying the same oversized prefix.
+ * @param session - active Session surface.
+ * @param measurement - token pricing aligned with that surface.
+ * @param range - failed compaction span.
+ * @returns a smaller balanced span, or null when it cannot shrink.
  */
 export function shrinkCompactableRange(
   session: Session,

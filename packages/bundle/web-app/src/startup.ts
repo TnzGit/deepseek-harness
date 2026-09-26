@@ -19,15 +19,6 @@ export const inject = ['cmdlineArgs']
 /** Service provided by this ordinary plugin and injected by flag-configured rows. */
 export const WEB_STARTUP_SERVICE = 'webStartup'
 
-/** Explicit opt-in for binding the Web UI on every interface. */
-const ALLOW_LAN_ENV = 'DSH_ALLOW_LAN'
-/** Legacy fork alias retained so existing remote-admin launch scripts keep working. */
-const LEGACY_ALLOW_REMOTE_ADMIN_ENV = 'DSH_ALLOW_REMOTE_ADMIN'
-
-function allowsLanBinding(): boolean {
-  return process.env[ALLOW_LAN_ENV] === '1' || process.env[LEGACY_ALLOW_REMOTE_ADMIN_ENV] === '1'
-}
-
 /** What the web rows read from {@link WEB_STARTUP_SERVICE}. */
 export interface WebStartupValues {
   /** Whether this invocation opens the default browser after startup. */
@@ -66,15 +57,15 @@ Examples:
   dsh --profile web                          serve on the composed host and port
   dsh --profile web --no-open                serve without opening a browser
   dsh --profile web --port 8080              serve on another port
-  DSH_ALLOW_LAN=1 dsh --profile web --host 0.0.0.0
-                                                 serve authenticated Web UI on the LAN
+  dsh --profile web                          serve without browser login on all interfaces
+  dsh --profile web --host 127.0.0.1         restrict binding to loopback
 `)
 }
 
 /**
  * Parse and provide the Web invocation as an ordinary Cordis service. The
- * command's action publishes the flags this invocation named; `--host 0.0.0.0`
- * or a non-numeric `--port` is a usage error, so on rejection (and on `--help`)
+ * command's action publishes the flags this invocation named; a non-numeric
+ * `--port` is a usage error, so on rejection (and on `--help`)
  * nothing is provided.
  * @param ctx - plugin context carrying the command line.
  */
@@ -82,12 +73,6 @@ export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0' && !allowsLanBinding()) {
-      program.error(
-        'error: --host 0.0.0.0 requires explicit LAN opt-in; set DSH_ALLOW_LAN=1 '
-        + 'and reopen the authenticated URL printed by dsh web',
-      )
-    }
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
     }

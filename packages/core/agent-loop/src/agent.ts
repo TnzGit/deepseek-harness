@@ -40,11 +40,11 @@ import { RuntimeContextProjection } from './runtime-context.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
 import { executeToolCalls } from './tool-calls.ts'
-import { StreamRepetitionDetector, withDegenerateRecovery } from './degenerate-response.ts'
+import { StreamRepetitionDetector, withProjectedDegenerateRecovery } from './degenerate-response.ts'
 import {
   reasoningOnlyMaxTokenFacts,
-  repeatsMaxTokenCheckpoint,
-  withMaxTokenContinuation,
+  repeatsProjectedMaxTokenCheckpoint,
+  withProjectedMaxTokenContinuation,
 } from './max-token-continuation.ts'
 
 type Phase =
@@ -79,6 +79,8 @@ interface DegenerateResponseFacts {
 function degenerateResponseFacts(content: readonly ContentBlock[]): DegenerateResponseFacts | undefined {
   const toolCallCount = content.filter(block => block.type === 'tool-call').length
   if (toolCallCount > 0) return
+  // Media is a usable response even when it has no accompanying text.
+  if (content.some(block => block.type === 'image' || block.type === 'file')) return
   const visible = content
     .filter(block => block.type === 'text')
     .map(block => block.text)
@@ -674,9 +676,10 @@ export class ReactLoopAgent implements Agent {
           const cumulativeOutputTokens = outputTokens === undefined
             ? undefined
             : maxTokenContinuationOutputTokens + outputTokens
-          const events = this.session.snapshotEvents()
+          const recovery = this.loopCtx.sessionProjections.stateOf(this.session, 'agentRecovery')
           const repeatedCheckpoint = facts !== undefined
-            && repeatsMaxTokenCheckpoint(events, turn, message.content)
+            && recovery !== undefined
+            && repeatsProjectedMaxTokenCheckpoint(recovery, turn, message.content)
           if (facts !== undefined
             && !repeatedCheckpoint
             && maxTokenContinuations < maxTokenContinuationLimit
@@ -867,10 +870,11 @@ export class ReactLoopAgent implements Agent {
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)
-    const events = session.snapshotEvents()
-    const boundaryMessages = withMaxTokenContinuation(
-      events,
-      withDegenerateRecovery(events, session.deriveMessages()),
+    const recovery = this.loopCtx.sessionProjections.stateOf(session, 'agentRecovery')
+    if (recovery === undefined) throw new Error('agent recovery projection is unavailable')
+    const boundaryMessages = withProjectedMaxTokenContinuation(
+      recovery,
+      withProjectedDegenerateRecovery(recovery, session.deriveMessages()),
     )
     for (const message of boundaryMessages) {
       if (this.frozenMessages.has(message)) continue

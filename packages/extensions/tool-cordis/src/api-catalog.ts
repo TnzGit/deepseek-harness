@@ -2904,7 +2904,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>',
-        description: 'Establish a published child on the named provider. Capability and semantic checks run before delegation. Provider ownership lasts until its promise fulfills; a rejection therefore has no run for the caller to dispose and emits no run lifecycle events. Post-publication turn and infrastructure failures settle through the returned run. A catalog append failure disposes the run and handles its result rejection; the caller receives the catalog error even if disposal also fails.',
+        description: 'Establish a published child on the named provider. Capability and semantic checks run before delegation. One-shot execution admission may then wait in FIFO order; caller cancellation while queued rejects before the provider sees the request. Provider ownership lasts until its promise fulfills; a rejection therefore has no run for the caller to dispose and emits no run lifecycle events. Post-publication turn and infrastructure failures settle through the returned run. A catalog append failure disposes the run and handles its result rejection; the caller receives the catalog error even if disposal also fails.',
         parameters: [{ name: 'name', description: 'the provider to use.' }, { name: 'request', description: 'child label, prompt, parent, signal, and optional capabilities.' }],
         returns: 'the published holder-owned run.',
       },
@@ -6139,11 +6139,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResolvedNormalRetryPolicy',
-    declaration: 'export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'normal\';\n    readonly maxRetries: number;\n    readonly retryableCodes: readonly string[];\n}',
+    declaration: 'export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'normal\';\n    readonly maxRetries: number;\n    readonly retryableCodes: readonly string[];\n    readonly failureOverrides?: Readonly<Record<string, ResolvedRetryFailureOverride>>;\n}',
   },
   {
     name: 'ResolvedRetryBackoff',
     declaration: 'export interface ResolvedRetryBackoff {\n    readonly initialDelayMs: number;\n    readonly maxDelayMs: number;\n    readonly jitterRatio: number;\n}',
+  },
+  {
+    name: 'ResolvedRetryFailureOverride',
+    declaration: 'export interface ResolvedRetryFailureOverride extends ResolvedRetryBackoff {\n    readonly maxRetries: number;\n}',
   },
   {
     name: 'ResolvedRetryPolicy',
@@ -6779,7 +6783,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionTitleAutomaticMode',
-    declaration: 'export type SessionTitleAutomaticMode = \'first-prompt\' | \'all-prompts\';',
+    declaration: 'export type SessionTitleAutomaticMode = \'first-prompt\' | \'all-prompts\' | \'every-nth-prompt\';',
   },
   {
     name: 'SessionTitleEventData',
@@ -6799,7 +6803,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionTitleProvider',
-    declaration: 'export interface SessionTitleProvider {\n    readonly id: SessionTitleProviderId;\n    readonly automatic: SessionTitleAutomaticMode;\n    generate(request: SessionTitleProviderRequest): Promise<SessionTitleProviderResult>;\n}',
+    declaration: 'export interface SessionTitleProvider {\n    readonly id: SessionTitleProviderId;\n    readonly automatic: SessionTitleAutomaticMode;\n    readonly promptInterval?: number;\n    generate(request: SessionTitleProviderRequest): Promise<SessionTitleProviderResult>;\n}',
   },
   {
     name: 'SessionTitleProviderRequest',
@@ -7607,7 +7611,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TurnEndReasonMap',
-    declaration: 'export interface TurnEndReasonMap {\n    completed: {\n        kind: \'completed\';\n    };\n    aborted: {\n        kind: \'aborted\';\n        reason: TurnEndCancelCause;\n    };\n    blocked: {\n        kind: \'blocked\';\n    };\n    error: {\n        kind: \'error\';\n        error: LlmFailure;\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    interrupted: {\n        kind: \'interrupted\';\n    };\n    forked: {\n        kind: \'forked\';\n    };\n}',
+    declaration: 'export interface TurnEndReasonMap {\n    completed: {\n        kind: \'completed\';\n    };\n    aborted: {\n        kind: \'aborted\';\n        reason: TurnEndCancelCause;\n    };\n    blocked: {\n        kind: \'blocked\';\n    };\n    error: {\n        kind: \'error\';\n        error: LlmFailure;\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n        autoContinuation?: \'exhausted\';\n    };\n    interrupted: {\n        kind: \'interrupted\';\n    };\n    forked: {\n        kind: \'forked\';\n    };\n}',
   },
   {
     name: 'TypertCodec',

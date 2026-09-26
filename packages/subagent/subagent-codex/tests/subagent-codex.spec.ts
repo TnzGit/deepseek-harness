@@ -2166,7 +2166,7 @@ describe('run lifecycle and quiescence', () => {
       prompt: [{ type: 'text', text: 'task' }],
       parent: invalidCwdParent,
       signal: invalidCwdAbort.signal,
-    })).rejects.toThrow('aborted before app-server startup')
+    })).rejects.toThrow('cancel invalid cwd startup')
     expect(spawn).not.toHaveBeenCalled()
 
     const starting = ctx.subagents.start('codex-diagnostic', {

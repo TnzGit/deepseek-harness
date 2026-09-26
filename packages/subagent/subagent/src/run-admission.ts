@@ -27,7 +27,10 @@ export class OneShotRunAdmission {
 
   constructor(private readonly capacity: () => number) {}
 
-  /** Reserve immediately without bypassing already queued callers. */
+  /** Reserve immediately without bypassing already queued callers.
+   * @param signal - cancellation signal for the request.
+   * @returns release callback when a slot is available.
+   */
   tryAcquire(signal: AbortSignal): (() => void) | undefined {
     if (signal.aborted) throw abortError(signal)
     if (this.pending.length > 0 || this.active >= this.capacity()) return undefined
@@ -35,7 +38,10 @@ export class OneShotRunAdmission {
     return this.release()
   }
 
-  /** Wait for one execution slot in FIFO order. */
+  /** Wait for one execution slot in FIFO order.
+   * @param signal - cancellation signal for the queued request.
+   * @returns a release callback after admission.
+   */
   acquire(signal: AbortSignal): Promise<() => void> {
     signal.throwIfAborted()
     return new Promise<() => void>((resolve, reject) => {

@@ -35,6 +35,7 @@ import { ReactLoopAgent } from './agent.ts'
 export type { DegenerateResponseEventData } from './degenerate-response.ts'
 export type { MaxTokenContinuationEventData } from './max-token-continuation.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
+import { agentRecoveryProjectionDefinition } from './recovery-projection.ts'
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   DEFAULT_MAX_TOKEN_CONTINUATIONS,
@@ -395,6 +396,7 @@ export class AgentLoop extends Service implements AgentFactory {
     // rejected constructor leaves no projection unit behind.
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
     ctx.sessionProjections.register(inboxProjectionDefinition)
+    ctx.sessionProjections.register(agentRecoveryProjectionDefinition)
     this.ownership = new FactoryOwnership(ctx.fiber)
     this.runtime = { ctx }
     ctx.effect(() => () => this.ownership.dispose(), 'agentLoop.transactions()')

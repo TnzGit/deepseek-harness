@@ -50,7 +50,22 @@ export function assertReleasedV4Header(header: unknown): void {
  * @returns the same validated artifact and event objects.
  */
 export function restoreReleasedV4Artifact(artifact: SessionFormatArtifact, knownEventTypes: ReadonlySet<string>): SessionFormatArtifact {
-  assertReleasedV4Header(artifact.header)
+  return restoreV4FamilyArtifact(artifact, knownEventTypes, 4)
+}
+
+/**
+ * Validate unchanged V4 semantics in a V5 generation without weakening historical V4 reads.
+ * @param artifact - complete detached V4-family artifact.
+ * @param knownEventTypes - event types understood by the installed Session package.
+ * @param generation - owning generation of the artifact.
+ * @returns the same validated artifact and event objects.
+ */
+export function restoreV4FamilyArtifact(
+  artifact: SessionFormatArtifact,
+  knownEventTypes: ReadonlySet<string>,
+  generation: 4 | 5,
+): SessionFormatArtifact {
+  assertReleasedV4Header(generation === 4 ? artifact.header : { ...artifact.header, version: 4 })
   const cut = sessionFormatCount(artifact.inheritedEventCount, 'format v4 inherited event count')
   if (cut > artifact.events.length) throw new SessionFormatError('format v4 inherited event count exceeds its events')
   if (!artifact.header.isSeeded && cut !== 0) throw new SessionFormatError('unseeded format v4 Session has inherited events')
@@ -76,7 +91,7 @@ export function restoreReleasedV4Artifact(artifact: SessionFormatArtifact, known
   if (!artifact.header.isSeeded && lastInheritedMarker !== undefined) {
     throw new SessionFormatError('format v4 unseeded Session contains an inherited end-seed marker')
   }
-  assertReleasedV4Relationships(artifact, knownEventTypes)
+  assertReleasedV4Relationships(artifact, knownEventTypes, generation)
   return artifact
 }
 
@@ -86,7 +101,7 @@ export function restoreReleasedV4Artifact(artifact: SessionFormatArtifact, known
  * @param currentVersion - generation whose watermark coordinates are active.
  * @returns the active delivery's nonempty Session id, or undefined for other events and generations.
  */
-export function validateDeliveryAccepted(event: SessionFormatEvent, currentVersion: 3 | 4): string | undefined {
+export function validateDeliveryAccepted(event: SessionFormatEvent, currentVersion: 3 | 4 | 5): string | undefined {
   if (event.type !== 'session-log-deepseek/delivery-accepted') return undefined
   const data = event.data
   if (!isSessionFormatJsonObject(data)) throw new SessionFormatError('delivery-accepted data must be an object')
@@ -106,14 +121,20 @@ export function validateDeliveryAccepted(event: SessionFormatEvent, currentVersi
  * unknown ignorable records retain their uninterpreted payloads.
  * @param artifact - decoded artifact with its final inherited cut.
  * @param knownEventTypes - installed event types whose payloads this reader interprets.
+ * @param generation - owning generation of the artifact.
  */
-export function assertReleasedV4Relationships(artifact: SessionFormatArtifact, knownEventTypes: ReadonlySet<string>): void {
+export function assertReleasedV4Relationships(
+  artifact: SessionFormatArtifact,
+  knownEventTypes: ReadonlySet<string>,
+  generation: 4 | 5 = 4,
+): void {
   const ids = new Set<string>()
   for (const event of artifact.events) {
     if (!knownEventTypes.has(event.type)) continue
     assertV4DeveloperData(event)
     assertV4MessageSources(event)
-    const deliveryId = validateDeliveryAccepted(event, 4)
+    const deliveryId = validateDeliveryAccepted(event, generation === 5 ? 4 : generation)
+      ?? (generation === 5 ? validateDeliveryAccepted(event, 5) : undefined)
     if (deliveryId !== undefined
       && !(artifact.header.parentSession !== undefined && event.seq < artifact.inheritedEventCount)
       && deliveryId !== artifact.header.id) {

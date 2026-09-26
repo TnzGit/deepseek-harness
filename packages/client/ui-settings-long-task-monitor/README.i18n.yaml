@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/client/ui-settings-long-task-monitor/README.md
+/:
+  en: a600496a3cf0e32b
+  zh: 55b4757feaa98500
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor:
+  en: 24e0586a404e8e9b
+  zh: 30806dc65eddba72
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/summary:
+  en: 5763e10c6a44c433
+  zh: 6e6cc0291dc5b8df
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/use-this-package:
+  en: 250a400923626f01
+  zh: fe1eb2cad99235b3
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/understand-the-implementation:
+  en: e5d0494fffe57ed0
+  zh: 7e3e9db668424403
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/further-exploration:
+  en: 6f79a5ea09db1b6f
+  zh: f784413b9b934dba
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/model-experience/browser-settings-card:
+  en: 0ab3dad1a72c36d0
+  zh: f488736ccc405b12
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/model-experience/browser-settings-card/what-the-model-sees:
+  en: 6604c25db3f702f8
+  zh: af9085ab2d5fde27
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/model-experience/browser-settings-card/token-effect:
+  en: 96a2c419cbbab971
+  zh: 25ae7ca4dae3c9b7
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/model-experience/browser-settings-card/kv-cache-effect:
+  en: efd48d7e3715bf54
+  zh: 063e83885a443cc9
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/known-limitations-and-deferred-work:
+  en: 90f470f015093f12
+  zh: 9984097502cc2d85
+/deepseek-ai-dsh-client-ui-settings-long-task-monitor/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: e88aeb617ffb74ea

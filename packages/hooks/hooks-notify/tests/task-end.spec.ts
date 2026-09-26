@@ -67,14 +67,15 @@ describe('hooks-notify task wiring', () => {
     const calls: Array<{ url: string; body: unknown }> = []
     vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      calls.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+      if (typeof init?.body !== 'string') throw new Error('notification test requires a JSON string body')
+      calls.push({ url, body: JSON.parse(init.body) })
       return new Response(null, { status: 204 })
-    }) as typeof fetch)
+    }))
 
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     const session = ctx.sessions.create(SessionId('notify-live'))
-    const agent = { session } as unknown as Agent
+    const agent = { session } as Agent
     const { config, refs } = mutableConfig()
     HooksNotify.apply(ctx, config)
 

@@ -5,7 +5,8 @@
  * @module @deepseek-ai/dsh-hooks-notify
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -15,29 +16,25 @@ import { notifyVars, postNotification, renderMessage, type NotifyEvent } from '.
 export const name = 'hooks-notify'
 export const inject: string[] = []
 
-declare module '@deepseek-ai/cordis' {
-  interface Events {
-    /** Loader committed one or more schema-declared volatile config paths. */
-    'loader/volatile-update'(paths: readonly (readonly string[])[]): void
-  }
-}
-
 /** When a notification fires. */
 export type NotifyTrigger = 'turn-end' | 'goal-complete' | 'both'
 
-interface LiveValue<T> {
-  get(): T
-}
-
 /** Runtime configuration references retained by the mounted plugin. */
 export interface Config {
-  readonly enabled: LiveValue<boolean>
-  readonly url: LiveValue<string>
-  readonly trigger: LiveValue<NotifyTrigger>
-  readonly message: LiveValue<string>
-  readonly sound: LiveValue<string>
-  readonly repeat: LiveValue<number>
-  readonly timeoutMs: LiveValue<number>
+  /** Whether outbound notifications are enabled. */
+  readonly enabled: Volatile<boolean>
+  /** HTTP webhook endpoint. */
+  readonly url: Volatile<string>
+  /** Agent or goal lifecycle event that sends a notification. */
+  readonly trigger: Volatile<NotifyTrigger>
+  /** Message body sent to the webhook. */
+  readonly message: Volatile<string>
+  /** Sound name interpreted by the notification receiver. */
+  readonly sound: Volatile<string>
+  /** Number of notification repeats. */
+  readonly repeat: Volatile<number>
+  /** HTTP request deadline in milliseconds. */
+  readonly timeoutMs: Volatile<number>
 }
 
 /** Plain values accepted by Loader and Settings. */
@@ -66,7 +63,7 @@ export const Config: z<ConfigInput, Config> = z.object({
   sound: z.string().default(DEFAULT_SOUND).volatile(),
   repeat: z.number().step(1).min(1).default(DEFAULT_REPEAT).volatile(),
   timeoutMs: z.number().step(1).min(1).default(DEFAULT_TIMEOUT_MS).volatile(),
-}) as z<ConfigInput, Config>
+})
 
 interface ResolvedConfig {
   readonly enabled: boolean
@@ -134,8 +131,7 @@ export function apply(ctx: Context, config: Config): void {
       sound: current.sound,
       repeat: current.repeat,
     }
-    let run!: Promise<void>
-    run = postNotification(current.url, body, current.timeoutMs, fetch, controller.signal)
+    const run = postNotification(current.url, body, current.timeoutMs, fetch, controller.signal)
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
           ctx.logger.warn('hooks-notify: %s notification failed: %s', event.kind, String(error))
