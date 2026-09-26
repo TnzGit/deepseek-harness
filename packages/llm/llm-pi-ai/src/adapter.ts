@@ -301,8 +301,8 @@ export class PiAiAdapter extends LlmAdapter {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
     const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
-    // Only a cap the deployment configured is a request default; the
-    // catalog's `maxTokens` sizes the model and stops there.
+    // pi-ai uses the model's maxTokens when a call omits the cap. Publish the
+    // same effective default so request admission can reserve its output budget.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
     return {
       provider,
@@ -310,7 +310,7 @@ export class PiAiAdapter extends LlmAdapter {
       name: resolvedModel.name,
       inputModalities: [...resolvedModel.input],
       context: { contextWindow: resolvedModel.contextWindow },
-      ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
+      defaultMaxTokens: configuredMaxTokens ?? resolvedModel.maxTokens,
       ...reasoningInfo(resolvedModel, defaultLevel),
     }
   }
@@ -341,10 +341,9 @@ export class PiAiAdapter extends LlmAdapter {
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
     const model = this.modelOf(snapshot, options.provider, options.model)
-    const reasoning = resolveReasoningLevel(
-      model,
-      options.reasoningEffort ?? profile.reasoning,
-    )
+    const reasoning = options.purpose === 'compaction'
+      ? getSupportedThinkingLevels(model).some(level => level === 'off') ? 'off' : undefined
+      : resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const consumer = new AbortController()

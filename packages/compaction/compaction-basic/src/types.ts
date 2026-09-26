@@ -22,6 +22,8 @@ export interface CompactionPolicyConfig {
   maxTokens?: number
   /** Extra attempts after the first compaction when pressure remains above threshold. Defaults to `1`. */
   compactionRetries?: number
+  /** Smaller balanced-range retries after a truncated summary. Defaults to `3`. */
+  summaryRangeRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
 }
@@ -54,6 +56,7 @@ interface ResolvedPolicyFields {
   readonly summarizationModel: string
   readonly maxTokens: number
   readonly compactionRetries: number
+  readonly summaryRangeRetries: number
   readonly maxOverflowRetries: number
 }
 

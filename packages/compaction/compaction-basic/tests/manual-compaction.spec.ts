@@ -380,6 +380,30 @@ describe('compactNow through the real loop', () => {
     await agent.whenIdle()
     expect(adapter.requests).toHaveLength(2)
   })
+
+  it('retries a capped manual summary on a smaller span before releasing admission', async () => {
+    const harness = await loopHarness()
+    const { agent, compact } = harness
+    await seedHistory(harness)
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: PROMPT }],
+      source: { kind: 'user' },
+    }))
+    await agent.whenIdle()
+    compact.error = Object.assign(new Error('summary output limit'), { code: 'MAX_TOKENS' })
+    compact.duringSummary = () => {
+      if (compact.calls.length === 2) compact.error = undefined
+    }
+
+    const result = await compact.compactNow(agent, SIGNAL)
+
+    expect(result).not.toBeNull()
+    expect(compact.calls).toHaveLength(2)
+    expect(compactEvents(agent.session).map(event => event.type)).toEqual([
+      'compaction/start', 'compaction/end',
+      'compaction/start', 'compaction/summary', 'compaction/end',
+    ])
+  })
 })
 
 describe('compactNow transaction and failure classification', () => {

@@ -73,6 +73,38 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
+  it('disables supported thinking for compaction despite a reasoning profile default', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'local-qwen': {
+          apiKeyEnv: 'PI_TEST_KEY',
+          api: 'openai-completions',
+          baseURL: `${server.url}/v1`,
+          reasoning: 'xhigh',
+          models: [{
+            id: 'qwen-test',
+            contextWindow: 243_200,
+            reasoningEfforts: { off: null, xhigh: 'xhigh' },
+            compat: {
+              thinkingFormat: 'qwen-chat-template',
+              chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } },
+            },
+          }],
+        },
+      },
+    })
+
+    await assemble(ctx, { provider: 'local-qwen', model: 'qwen-test', messages: [], purpose: 'compaction' })
+
+    expect(server.requests[0]).toMatchObject({
+      chat_template_kwargs: { enable_thinking: false },
+    })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+  })
+
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url)

@@ -31,6 +31,7 @@ const POLICY_CONFIG_KEYS = [
   'summarizationModel',
   'maxTokens',
   'compactionRetries',
+  'summaryRangeRetries',
   'maxOverflowRetries',
 ] as const
 
@@ -90,6 +91,7 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     summarizationModel: config.summarizationModel ?? '',
     maxTokens: config.maxTokens ?? 8192,
     compactionRetries: config.compactionRetries ?? 1,
+    summaryRangeRetries: config.summaryRangeRetries ?? 3,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
     modelPolicies,
     auto: config.auto ?? true,
@@ -120,6 +122,7 @@ export function resolveTargetPolicy(
     summarizationModel: override?.summarizationModel ?? config.summarizationModel,
     maxTokens: override?.maxTokens ?? config.maxTokens,
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
+    summaryRangeRetries: override?.summaryRangeRetries ?? config.summaryRangeRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
   })
 }
@@ -162,6 +165,7 @@ export function resolveCompactSpec(
     summarizationModel: policy.summarizationModel,
     maxTokens: policy.maxTokens,
     compactionRetries: policy.compactionRetries,
+    summaryRangeRetries: policy.summaryRangeRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
   })
 }
@@ -233,6 +237,7 @@ function validatePolicy(
   const retainTokens = config.retainTokens
   const maxTokens = config.maxTokens
   const compactionRetries = config.compactionRetries
+  const summaryRangeRetries = config.summaryRangeRetries
   const maxOverflowRetries = config.maxOverflowRetries
   if (thresholdRatio !== undefined) assertRatio(`${name}.thresholdRatio`, thresholdRatio)
   if (retainRatio !== undefined) assertRatio(`${name}.retainRatio`, retainRatio)
@@ -243,6 +248,9 @@ function validatePolicy(
   if (maxTokens !== undefined) assertPositiveInteger(`${name}.maxTokens`, maxTokens)
   if (compactionRetries !== undefined) {
     assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries)
+  }
+  if (summaryRangeRetries !== undefined) {
+    assertNonNegativeInteger(`${name}.summaryRangeRetries`, summaryRangeRetries)
   }
   if (maxOverflowRetries !== undefined) {
     assertNonNegativeInteger(`${name}.maxOverflowRetries`, maxOverflowRetries)

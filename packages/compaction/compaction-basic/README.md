@@ -70,6 +70,7 @@ All settings are optional. The defaults start condensing at 80% of the routed mo
 | `summarizationModel` | `''` | Set together with `summarizationProvider`; an empty pair uses the latest routed request target, then the `AgentOptions` pair. |
 | `maxTokens` | `8192` | Output cap for the summarization request; may include reasoning tokens. |
 | `compactionRetries` | `1` | Extra condensation attempts after the first when pressure remains above threshold. |
+| `summaryRangeRetries` | `3` | Smaller tool-pair-safe range retries when a summary reaches its output cap; `0` disables this fallback. |
 | `maxOverflowRetries` | `1` | Maximum retries after a confirmed context-window overflow; `0` disables recovery only. |
 | `modelPolicies` | `[]` | Exact `{ provider, model, ...partialPolicy }` overrides for individual model routes. |
 | `auto` | `true` | Enable automatic condensation and overflow recovery; set `false` for manual-only operation. |
@@ -78,7 +79,7 @@ Misconfiguration fails fast: an unknown setting, a duplicate per-model override,
 
 ### What happens when condensation runs
 
-The oldest balanced span is replaced by one summary message and the recent tail stays verbatim; the conversation continues from the summary. The operation reports how many history items were condensed and the estimated tokens freed. If nothing can be condensed safely — for example the whole conversation is one indivisible unit — nothing changes and nothing is written to the session log. If no model is available to write the summary (no configured target and no routed request yet), condensation fails with a clear error telling you to configure the summarization provider and model or route one request.
+The oldest balanced span is replaced by one summary message and the recent tail stays verbatim; the conversation continues from the summary. If a summary reaches its output cap, the backend retries on a smaller balanced prefix up to `summaryRangeRetries` times; failed attempts retain only closed diagnostic markers, never a partial checkpoint. The operation reports how many history items were condensed and the estimated tokens freed. If nothing can be condensed safely — for example the whole conversation is one indivisible unit — nothing changes and nothing is written to the session log. If no model is available to write the summary (no configured target and no routed request yet), condensation fails with a clear error telling you to configure the summarization provider and model or route one request.
 
 ### On-demand condensation with /compact
 

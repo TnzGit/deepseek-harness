@@ -154,6 +154,48 @@ export function selectCompactableRange(
 }
 
 /**
+ * Reduce a failed summary input to a strict balanced prefix near half its priced size.
+ * @param session - session supplying the current surface positions.
+ * @param measurement - pricing for the same current surface.
+ * @param range - inclusive span whose summary reached its output cap.
+ * @returns a smaller tool-pair-safe span, or `null` when it cannot be split.
+ */
+export function shrinkCompactableRange(
+  session: Session,
+  measurement: TokenMeasurement,
+  range: { readonly start: SessionSeq; readonly end: SessionSeq },
+): { start: SessionSeq; end: SessionSeq } | null {
+  const surfaceNodes = session.surface.nodes
+  const pricedNodes = measurement.nodes
+  if (surfaceNodes.length !== pricedNodes.length
+    || surfaceNodes.some((seq, index) => seq !== pricedNodes[index]?.seq)) {
+    throw new Error('compaction: token-meter surface does not match the current session surface')
+  }
+  const startIdx = surfaceNodes.indexOf(range.start)
+  const endIdx = surfaceNodes.indexOf(range.end)
+  if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) return null
+
+  const total = pricedNodes.slice(startIdx, endIdx + 1)
+    .reduce((sum, node) => sum + node.tokens, 0)
+  const target = Math.max(1, Math.floor(total / 2))
+  let accumulated = 0
+  let firstBalanced: number | undefined
+  let preferred: number | undefined
+  for (let index = startIdx; index < endIdx; index += 1) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    accumulated += pricedNodes[index]!.tokens
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    if (!toolPairingBalancedAfter(session, surfaceNodes[index]!)) continue
+    firstBalanced ??= index
+    if (accumulated <= target) preferred = index
+  }
+  const cutoffIdx = preferred ?? firstBalanced
+  if (cutoffIdx === undefined) return null
+  // oxlint-disable-next-line typescript/no-non-null-assertion
+  return { start: range.start, end: surfaceNodes[cutoffIdx]! }
+}
+
+/**
  * Run the single compaction transaction over one selected positional span.
  * Selection and validation are read-only. Idle/log validation and
  * `compaction/start` are synchronously adjacent, so the durable opening marker is

@@ -446,17 +446,18 @@ describe('catalog routes with per-model configuration', () => {
     })
 
     const info = await ctx.llm.resolveModelInfo('deepseek', catalogModel.id)
-    // The configured field wins and the name still comes from the catalog. The
-    // catalog's own output cap is the model's capability, not a cap anyone
-    // chose, so it must not arrive as the request default.
+    // The configured context wins; the catalog's output cap remains the cap
+    // pi-ai uses when the request omits maxTokens.
     expect(info.context).toEqual({ contextWindow: 4096 })
     expect(info.name).toBe(catalogModel.name)
-    expect(info.defaultMaxTokens).toBeUndefined()
+    expect(info.defaultMaxTokens).toBe(catalogModel.maxTokens)
+    expect((await ctx.llm.resolveCallConfig({ provider: 'deepseek', model: catalogModel.id })).maxTokens)
+      .toBe(catalogModel.maxTokens)
     // An explicit list replaces the catalog rather than adding to it.
     expect((await ctx.llm.listModels('deepseek')).map(model => model.id)).toEqual([catalogModel.id])
   })
 
-  it('materializes a request default only from a configured output cap', async () => {
+  it('uses a configured output cap instead of the catalog default', async () => {
     const server = await mockServer([])
     const [catalogModel] = getBuiltinModels('deepseek')
     if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')

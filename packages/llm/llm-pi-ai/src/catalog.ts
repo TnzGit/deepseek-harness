@@ -906,8 +906,8 @@ export function resolveRouteModels(
     if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
       invalid(provider, `model "${entry.id}" maxTokens must be a positive integer`)
     }
-    // Only a value the profile named is a deployment choice; the catalog's is
-    // the model's capability and stays out of request defaults.
+    // Keep explicit model caps identifiable while the adapter also publishes
+    // the catalog/fallback cap that pi-ai uses for an omitted request cap.
     if (entry.maxTokens !== undefined) configuredMaxTokens.set(entry.id, entry.maxTokens)
     return {
       // The installed entry lays the floor, and the fields below override it.

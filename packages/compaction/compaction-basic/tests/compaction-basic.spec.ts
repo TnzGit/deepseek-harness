@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
-import { selectCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
+import { selectCompactableRange, shrinkCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
 import { frameSummary } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import type { SummarizationInput, SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
@@ -315,6 +315,7 @@ describe('compact configuration and defaults', () => {
       summarizationModel: '',
       maxTokens: 8192,
       compactionRetries: 1,
+      summaryRangeRetries: 3,
       maxOverflowRetries: 1,
       modelPolicies: [],
       auto: true,
@@ -434,6 +435,7 @@ describe('compact configuration and defaults', () => {
     const bad = [
       [{ maxTokens: 0 }, /maxTokens/],
       [{ compactionRetries: -1 }, /compactionRetries/],
+      [{ summaryRangeRetries: -1 }, /summaryRangeRetries/],
       [{ maxOverflowRetries: -1 }, /maxOverflowRetries/],
       [{ auto: 'yes' }, /auto must be a boolean/],
       [{ summarizationProvider: 1 }, /summarizationProvider must be a string/],
@@ -898,6 +900,52 @@ describe('optional model-free tool-result pruning', () => {
 })
 
 describe('compaction region transaction', () => {
+  it('retries a capped summary on a smaller balanced span and commits only that span', async () => {
+    const compact = service({ auto: false, summaryRangeRetries: 2 })
+    const session = conversation(4)
+    const nodes = [...session.surface.nodes]
+    const capped = Object.assign(new Error('summary output limit'), { code: 'MAX_TOKENS' })
+    compact.error = capped
+    compact.mutateDuringSummary = () => {
+      if (compact.calls.length === 2) compact.error = undefined
+    }
+
+    const result = await compact.compactRegion(nodes[0]!, nodes[5]!, agent(session, MODEL), SIGNAL)
+
+    expect(compact.calls).toHaveLength(2)
+    expect(result.shadowedSeqs.length).toBeLessThan(6)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/end')).toHaveLength(2)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(1)
+    expect(session.deriveMessages().some(message => message.content.some(block =>
+      block.type === 'text' && block.text.includes('checkpoint')))).toBe(true)
+  })
+
+  it('keeps a capped summary fail-closed when the balanced span cannot shrink', async () => {
+    const compact = service({ auto: false, summaryRangeRetries: 3 })
+    const session = conversation(2)
+    const nodes = [...session.surface.nodes]
+    compact.error = Object.assign(new Error('summary output limit'), { code: 'MAX_TOKENS' })
+
+    await expect(compact.compactRegion(nodes[0]!, nodes[0]!, agent(session, MODEL), SIGNAL))
+      .rejects.toMatchObject({ code: 'MAX_TOKENS' })
+    expect(compact.calls).toHaveLength(1)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(0)
+  })
+
+  it('shrinks at a tool-pair-safe boundary', () => {
+    const ctx = createContext()
+    const session = toolConversation()
+    const nodes = session.surface.nodes
+    const smaller = shrinkCompactableRange(
+      session,
+      ctx.tokenMeter.measure(session),
+      { start: nodes[0]!, end: nodes[7]! },
+    )
+    expect(smaller).not.toBeNull()
+    expect(smaller!.end).not.toBe(nodes[7])
+    expect(toolPairingBalancedAfter(session, smaller!.end)).toBe(true)
+  })
+
   it('lands a framed, replayable checkpoint with exact source seqs and token price', async () => {
     const compact = service()
     compact.rawOutput = [
