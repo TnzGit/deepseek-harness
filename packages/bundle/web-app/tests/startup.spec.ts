@@ -11,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
@@ -31,6 +31,7 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   internals.stdout = process.stdout
   internals.stderr = process.stderr
+  vi.unstubAllEnvs()
 })
 
 /**
@@ -139,11 +140,37 @@ describe('web command-line provider', () => {
     expect(observed.exits).toEqual([1])
   })
 
-  it('rejects the intentionally unsupported all-interfaces host before the consumer activates', async () => {
+  it('rejects the all-interfaces host without explicit LAN opt-in', async () => {
+    vi.stubEnv('DSH_ALLOW_LAN', '0')
+    vi.stubEnv('DSH_ALLOW_REMOTE_ADMIN', '0')
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(observed.out).toContain('--host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
+    expect(observed.out).toContain('--host 0.0.0.0 requires explicit LAN opt-in')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([1])
+  })
+
+  it('allows the all-interfaces host with DSH_ALLOW_LAN=1', async () => {
+    vi.stubEnv('DSH_ALLOW_LAN', '1')
+    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
+    expect(values).toEqual({
+      host: '0.0.0.0',
+      openBrowser: true,
+      trustedHosts: [],
+    })
+    expect(observed.readerConfig).toEqual({
+      host: '0.0.0.0',
+      openBrowser: true,
+      port: 3080,
+      trustedHosts: [],
+    })
+    expect(observed.exits).toEqual([])
+  })
+
+  it('accepts DSH_ALLOW_REMOTE_ADMIN=1 as the legacy LAN-bind alias', async () => {
+    vi.stubEnv('DSH_ALLOW_REMOTE_ADMIN', '1')
+    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
+    expect(values?.host).toBe('0.0.0.0')
+    expect(observed.exits).toEqual([])
   })
 })
