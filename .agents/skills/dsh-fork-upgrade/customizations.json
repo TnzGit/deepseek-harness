@@ -84,6 +84,7 @@
     "Web profile package.json, pnpm-lock.yaml, cordis.patch.yml, and local plugin patches under ~/.dsh/profiles/web",
     "LaunchAgent bind 0.0.0.0, LAN/Tailscale no-auth policy, and trusted-LAN admin settings",
     "Exa overlay and EXA_API_KEY / model API keys in local environment only",
+    "The light-standard preset declaration in the Web profile: compare its plugins with the new shipped standard preset, keep only the curated Superpowers skill root, and verify it appears in agentPresets/list before resuming saved sessions",
     "Global DSH Superpowers skills, Graft MCP config/index, and local plugin packages",
     "Production Session backups and old-format read smoke before any restart"
   ]
