@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createMcpToolDefinition } from './tools.ts'
+import { summarizeMcpResult, type ResultSummaryConfig } from './result-summary.ts'
 
 /** Opt-in model-facing discovery names and complete response bounds. */
 export interface ToolDiscoveryConfig {
@@ -22,6 +23,8 @@ export interface ToolDiscoveryConfig {
   descriptionChars: number
   /** Optional raw MCP tool allowlist, enforced during discovery and invocation. */
   allowedTools?: string[]
+  /** Optional evidence-backed selected-field views for verbose JSON status operations. */
+  resultSummaries?: ResultSummaryConfig[]
 }
 
 /** The SDK's canonical discovered tool representation. */
@@ -49,6 +52,15 @@ interface CallArgs extends Record<string, unknown> {
 export function validateToolDiscovery(config: ToolDiscoveryConfig): void {
   if (config.searchToolName === config.callToolName) throw new Error('toolDiscovery tool names must differ')
   if (config.defaultLimit > config.maxLimit) throw new Error('toolDiscovery.defaultLimit must not exceed maxLimit')
+  const names = new Set<string>()
+  for (const summary of config.resultSummaries ?? []) {
+    if (names.has(summary.tool)) throw new Error(`duplicate resultSummaries tool ${summary.tool}`)
+    names.add(summary.tool)
+    if (!Number.isSafeInteger(summary.maxInlineBytes) || summary.maxInlineBytes < 1024) throw new Error('resultSummaries.maxInlineBytes must be an integer >= 1024')
+    if (summary.fields.length > 32 || summary.fields.some(path => path.length > 200 || (path !== '' && !/^\/(?:[^~]|~[01])*$/.test(path)))) {
+      throw new Error('resultSummaries.fields must contain at most 32 valid JSON pointers of at most 200 characters')
+    }
+  }
 }
 
 /**
@@ -72,6 +84,9 @@ export function createDiscoveryTools(
   const allowlist = config.allowedTools === undefined ? undefined : new Set(config.allowedTools)
   const allowed = new Map([...catalog].filter(([name]) => allowlist === undefined || allowlist.has(name)))
   const validator = new AjvJsonSchemaValidator()
+  for (const summary of config.resultSummaries ?? []) {
+    if (!allowed.has(summary.tool)) throw new Error(`resultSummaries contains unknown or disallowed tool ${summary.tool}`)
+  }
   const validators = new Map<string, ReturnType<typeof validator.getValidator>>()
   const search: ToolDefinition = {
     name: config.searchToolName,
@@ -99,6 +114,11 @@ export function createDiscoveryTools(
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['tool', 'arguments'],
       properties: { tool: { type: 'string', minLength: 1 }, arguments: { type: 'object', additionalProperties: true } },
+    },
+    projectResult: (result, execution) => {
+      const args = execution.arguments as CallArgs
+      const summary = config.resultSummaries?.find(entry => entry.tool === args.tool)
+      return summary === undefined ? Promise.resolve(undefined) : summarizeMcpResult(ctx, result, execution, summary)
     },
     call: async (input, execution) => {
       const parsed = validator.getValidator<CallArgs>(invoke.parameters)(input)

@@ -33,7 +33,8 @@ import {
   selectCompactableRange,
   shrinkCompactableRange,
 } from './region.ts'
-import { DEGENERATE_SUMMARY_CODE, summarizeWithLlm } from './summarizer.ts'
+import { DEGENERATE_SUMMARY_CODE, InefficientSummaryError, summarizeWithLlm } from './summarizer.ts'
+import type {} from '@deepseek-ai/dsh-spill'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
@@ -144,6 +145,18 @@ function isDegenerateSummary(error: unknown): boolean {
   return false
 }
 
+/** Manual maintenance classifies summary failures while preserving their cause. */
+function isInefficientSummary(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof InefficientSummaryError) return true
+    current = current.cause
+  }
+  return false
+}
+
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
   model: z.string().required(),
@@ -154,6 +167,9 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   summarizationProvider: summarizationProviderSchema,
   summarizationModel: summarizationModelSchema,
   maxTokens: maxTokensSchema,
+  summaryTargetTokens: maxTokensSchema,
+  maxSummaryRatio: thresholdRatioSchema,
+  summaryRefinementRetries: compactionRetriesSchema,
   compactionRetries: compactionRetriesSchema,
   maxOverflowRetries: maxOverflowRetriesSchema,
 })
@@ -177,6 +193,9 @@ export class BasicCompactionEngine extends CompactionEngine {
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
     maxTokens: maxTokensSchema,
+    summaryTargetTokens: maxTokensSchema,
+    maxSummaryRatio: thresholdRatioSchema,
+    summaryRefinementRetries: compactionRetriesSchema,
     compactionRetries: compactionRetriesSchema,
     maxOverflowRetries: maxOverflowRetriesSchema,
     modelPolicies: z.array(modelPolicy),
@@ -220,6 +239,10 @@ export class BasicCompactionEngine extends CompactionEngine {
           const result = await this.compactIfNeeded(agent, 'pressure', signal)
           if (result !== null) logResult(result, 'step pressure')
         } catch (error: unknown) {
+          // Exhausted quality retries cannot run again at every following step.
+          // Stop with the original evidence intact instead of repeatedly spending
+          // a full summary budget on a non-converging checkpoint.
+          if (isInefficientSummary(error) || isSummaryTokenCap(error) || isDegenerateSummary(error)) throw error
           if (error instanceof TargetPressureConfigError) {
             if (this.warnedPressureConfigTargets.has(error.targetKey)) return next()
             this.warnedPressureConfigTargets.add(error.targetKey)
@@ -457,8 +480,8 @@ export class BasicCompactionEngine extends CompactionEngine {
     return this.compactRangeWithFallback(
       { start, end },
       agent,
-      range => compactSurfaceRegion(
-        this.regionDependencies(),
+      (range, refinement) => compactSurfaceRegion(
+        this.regionDependencies(agent, refinement),
         agent.session,
         range.start,
         range.end,
@@ -473,21 +496,27 @@ export class BasicCompactionEngine extends CompactionEngine {
   private async compactRangeWithFallback(
     initial: { readonly start: SessionSeq; readonly end: SessionSeq },
     agent: Agent,
-    run: (range: { readonly start: SessionSeq; readonly end: SessionSeq }) => Promise<CompactionResult>,
+    run: (range: { readonly start: SessionSeq; readonly end: SessionSeq }, refinement: number) => Promise<CompactionResult>,
   ): Promise<CompactionResult> {
     let range = initial
     const target = conversationTarget(agent)
-    const summaryCap = target === undefined
-      ? this.config.maxTokens
-      : resolveTargetPolicy(this.config, target).maxTokens
+    const policy = target === undefined ? this.config : resolveTargetPolicy(this.config, target)
+    const summaryCap = policy.maxTokens
+    let refinement = 0
     for (let attempt = 0; ; attempt += 1) {
       try {
         this.ctx.logger.info(
           `compaction summary attempt ${attempt + 1}/${SUMMARY_RANGE_RETRIES + 1}: `
           + `seqs ${range.start}-${range.end}, maxTokens=${summaryCap}, reasoning=off`,
         )
-        return await run(range)
+        return await run(range, refinement)
       } catch (error: unknown) {
+        if (isInefficientSummary(error)) {
+          if (refinement >= policy.summaryRefinementRetries) throw error
+          refinement += 1
+          this.ctx.logger.warn(`compaction checkpoint saved too little space; regenerating original evidence with a tighter target (refinement ${refinement})`)
+          continue
+        }
         const tokenCap = isSummaryTokenCap(error)
         const degenerate = isDegenerateSummary(error)
         if ((!tokenCap && !degenerate) || attempt >= SUMMARY_RANGE_RETRIES) throw error
@@ -535,8 +564,8 @@ export class BasicCompactionEngine extends CompactionEngine {
           return await this.compactRangeWithFallback(
             range,
             agent,
-            candidate => compactSurfaceRegion(
-              this.regionDependencies(),
+            (candidate, refinement) => compactSurfaceRegion(
+              this.regionDependencies(agent, refinement),
               agent.session,
               candidate.start,
               candidate.end,
@@ -574,9 +603,25 @@ export class BasicCompactionEngine extends CompactionEngine {
   }
 
   /** Bind the effective token meter and dynamically dispatched summarizer hook. */
-  private regionDependencies(): Parameters<typeof compactSurfaceRegion>[0] {
+  private regionDependencies(agent: Agent, refinement: number): Parameters<typeof compactSurfaceRegion>[0] {
+    const target = conversationTarget(agent)
+    const policy = target === undefined ? this.config : resolveTargetPolicy(this.config, target)
     return {
       meter: this.ctx.tokenMeter,
+      summaryTargetTokens: policy.summaryTargetTokens,
+      maxSummaryRatio: policy.maxSummaryRatio,
+      refinement,
+      archive: async (input, start, end) => {
+        const store = this.ctx.get('spillStore')
+        if (store === undefined) return undefined
+        const ref = await store.saveText({
+          owner: { sessionId: agent.session.id },
+          source: { kind: 'session-reference', sessionId: agent.session.id, label: `compaction source seqs ${start}-${end}` },
+          suggestedName: `compaction-evidence-${start}-${end}.json`,
+          content: JSON.stringify({ sessionId: agent.session.id, startSeq: start, endSeq: end, messages: input.messages }),
+        })
+        return `${ref.locator} (${ref.bytes} UTF-8 bytes; session ${agent.session.id}, seqs ${start}-${end}). ${ref.retrievalHint}`
+      },
       summarize: (input, owner, abort) => this.summarize(input, owner, abort),
       recover: (error, agent, sourceEventSeqs, signal) => this.ctx.waterfall('compaction/summary-error', {
         session: agent.session,

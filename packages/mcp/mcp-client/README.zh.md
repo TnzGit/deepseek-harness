@@ -78,6 +78,8 @@ kind: "package-reference"
 
 搜索结果进入普通工具历史，可以裁剪或压缩，不会扩大后续请求的工具头。不需要模型提供商专用的延迟加载协议。重新同步替换私有目录，两个公开 schema 保持稳定。服务器指令和共享资源发现保留原有行为。
 
+对于冗长的 JSON 状态操作，可显式配置 `toolDiscovery.resultSummaries`，例如 `[{ tool: binary_session, fields: ['/result/open', '/result/cleanup_pending', '/result/analysis_activity'], maxInlineBytes: 4096 }]`。配置项指定精确的已允许操作与 RFC 6901 指针（最多 32 个、每个最多 200 字符）。桥接器先通过 `spillStore` 保存完整且已验证的 MCP 值，再展示选中字段与回查引用。过大字段只给引用而不截断；完整内联 JSON 的字节预算包含元数据。程序侧规范值保持完整，工具定义不会增长。缺少存储、非 JSON 或非文本结果、存储失败或引用本身过大时保留普通视图；提供方错误绝不做摘要。完整证据可通过原生 read/grep 或 JSON 解析读取保存的 MCP 外层结构（`structuredContent`，或解析 `content[0].text`）。文件保留期遵循 spill 后端。省略配置时所有结果保持原样。
+
 ### 工具命名与共存
 
 模型看到每个工具都带有稳定的服务器限定名称：`mcp__<serverName>__<rawName>`，例如 `mcp__github__create_issue`——与 Claude Code 和 Codex 使用的命名形态相同。只要服务器保持相同的工具名称，名称就保持不变，因此会话历史与权限规则在重启和重载后仍然有效。两个服务器可以同时提供名为 `search` 的工具，分别以 `mcp__github__search` 和 `mcp__web__search` 共存。

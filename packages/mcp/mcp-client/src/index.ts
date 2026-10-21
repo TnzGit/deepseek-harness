@@ -129,6 +129,11 @@ const ToolDiscovery = z.object({
   maxResultBytes: z.number().step(1).min(512).default(16384),
   descriptionChars: z.number().step(1).min(1).default(240),
   allowedTools: z.union([z.const(undefined), z.array(String)]),
+  resultSummaries: z.union([z.const(undefined), z.array(z.object({
+    tool: z.string().required(),
+    fields: z.array(String).required(),
+    maxInlineBytes: z.number().step(1).min(1024).default(4096),
+  }))]),
 })
 
 export const Config = z.union([

@@ -21,10 +21,14 @@ import type { Message, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { frameSummary } from './summarizer.ts'
+import { frameSummary, InefficientSummaryError } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 interface RegionDependencies {
   readonly meter: TokenMeter
+  readonly summaryTargetTokens: number
+  readonly maxSummaryRatio: number
+  readonly refinement: number
+  archive(input: SummarizationInput, start: SessionSeq, end: SessionSeq): Promise<string | undefined>
   summarize(input: SummarizationInput, agent: Agent, signal?: AbortSignal): Promise<SummaryResult>
   recover(error: unknown, agent: Agent, sourceEventSeqs: readonly SessionSeq[], signal?: AbortSignal): boolean
 }
@@ -438,11 +442,27 @@ async function summarizeCompaction(
   assertStable: StabilityCheck,
   signal?: AbortSignal,
 ): Promise<SummarizedCompaction> {
+  signal?.throwIfAborted()
+  const evidence = await dependencies.archive(prepared.input, prepared.start, prepared.end)
+  signal?.throwIfAborted()
+  const framingTokens = dependencies.meter.estimateMessage(createUserMessage({
+    content: frameSummary([], evidence),
+    source: compactCheckpointSource(compactionId, sourceCommandId),
+  }))
+  let checkpointBudget = 0
   let summaryResult: SummaryResult
   for (;;) {
     signal?.throwIfAborted()
+    checkpointBudget = Math.min(
+      Math.floor(dependencies.summaryTargetTokens / 2 ** dependencies.refinement),
+      framingTokens + Math.floor(prepared.shadowedRouteTokenCount * dependencies.maxSummaryRatio),
+    )
     try {
-      summaryResult = await dependencies.summarize(prepared.input, agent, signal)
+      summaryResult = await dependencies.summarize({
+        ...prepared.input,
+        summaryBudget: { tokens: Math.max(1, checkpointBudget - framingTokens), refinement: dependencies.refinement,
+          ...evidence === undefined ? {} : { evidence } },
+      }, agent, signal)
       break
     } catch (error: unknown) {
       if (signal?.aborted === true) throw error
@@ -453,7 +473,7 @@ async function summarizeCompaction(
     }
   }
   const checkpointMessage = createUserMessage({
-    content: frameSummary(summaryResult.summary),
+    content: frameSummary(summaryResult.summary, evidence),
     source: compactCheckpointSource(compactionId, sourceCommandId),
   })
   // The checkpoint is text-only, so its fixed-heuristic price IS its route
@@ -461,8 +481,22 @@ async function summarizeCompaction(
   // question — does the replacement lower the next request's pressure.
   const framedSummaryTokenCount = dependencies.meter.estimateMessage(checkpointMessage)
   if (framedSummaryTokenCount >= prepared.shadowedRouteTokenCount) {
-    throw new Error(
+    const Failure = framingTokens < prepared.shadowedRouteTokenCount * (1 - dependencies.maxSummaryRatio)
+      ? InefficientSummaryError : Error
+    throw new Failure(
       `summary is not smaller than the shadowed content (${framedSummaryTokenCount} estimated framed tokens >= ${prepared.shadowedRouteTokenCount})`,
+    )
+  }
+  // A text-only provider usage count protects routes whose tokenizer differs
+  // substantially from the heuristic. Reasoning tokens must not price the body.
+  const summaryTokens = Math.max(framedSummaryTokenCount,
+    summaryResult.rawOutput?.every(block => block.type === 'text') === true
+      && summaryResult.usage !== undefined
+      ? summaryResult.usage.outputTokens + framingTokens : 0)
+  if (summaryTokens > checkpointBudget) {
+    throw new InefficientSummaryError(
+      `checkpoint exceeds its size/savings budget (${summaryTokens} tokens > ${checkpointBudget}; `
+      + `source ${prepared.shadowedRouteTokenCount}); original evidence and surface remain intact`,
     )
   }
   return {

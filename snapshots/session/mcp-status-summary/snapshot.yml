@@ -1,0 +1,8 @@
+version: 1
+scenario: mcp-status-summary
+profile: headless
+composition: mcp-status-summary
+recording: authored
+header:
+  class: mcp-status-summary
+  pin: true

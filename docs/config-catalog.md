@@ -666,7 +666,7 @@ export type ThemePreference = typeof THEME_PREFERENCES[number]
 ## `@deepseek-ai/dsh-compaction-basic`
 
 - `inject`: `llm` · `tokenMeter` · `sessions`
-- `source`: [`packages/compaction/compaction-basic/src/types.ts:40`](../packages/compaction/compaction-basic/src/types.ts)
+- `source`: [`packages/compaction/compaction-basic/src/types.ts:46`](../packages/compaction/compaction-basic/src/types.ts)
 
 ```ts config-catalog
 /** Basic compaction configuration with an optional exact-target policy table. */
@@ -693,6 +693,12 @@ export interface CompactionPolicyConfig {
   summarizationModel?: string
   /** Provider generation cap for summarization. Defaults to the resolved `headroomTokens`; an explicit cap must be positive. */
   maxTokens?: number
+  /** Target maximum framed checkpoint size, independent of the generation cap. Defaults to `8192` tokens. */
+  summaryTargetTokens?: number
+  /** Maximum summary-body/source token ratio; framing is additionally allowed. Defaults to `0.35`. */
+  maxSummaryRatio?: number
+  /** Regenerations of an oversized checkpoint before leaving the original surface intact. Defaults to `1`. */
+  summaryRefinementRetries?: number
   /** Extra attempts after the first compaction when pressure remains above threshold. Defaults to `1`. */
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
@@ -2148,6 +2154,8 @@ export interface ToolDiscoveryConfig {
   descriptionChars: number
   /** Optional raw MCP tool allowlist, enforced during discovery and invocation. */
   allowedTools?: string[]
+  /** Optional evidence-backed selected-field views for verbose JSON status operations. */
+  resultSummaries?: ResultSummaryConfig[]
 }
 
 /** Automatic reconnect policy for one MCP server connection. */
@@ -2160,6 +2168,16 @@ export interface ReconnectConfig {
   maxDelayMs?: number
   /** Consecutive failed attempts per outage before giving up for good (default 10). */
   maxAttempts?: number
+}
+
+/** Opt-in selected-field view for one raw MCP operation; full results remain retrievable. */
+export interface ResultSummaryConfig {
+  /** Exact raw operation name, validated against the discovered catalog. */
+  tool: string
+  /** RFC 6901 JSON pointers into the single JSON text or structured result. */
+  fields: string[]
+  /** Maximum UTF-8 bytes of the complete inline JSON, including its evidence reference. */
+  maxInlineBytes: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-mcp-client -->

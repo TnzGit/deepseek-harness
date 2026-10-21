@@ -5,6 +5,7 @@ import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
 import { selectCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
 import { frameSummary } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
+import { SpillStore, SpillLocator, type SaveTextSpill } from '@deepseek-ai/dsh-spill'
 import type { SummarizationInput, SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import {
@@ -299,6 +300,80 @@ function service(
   return new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, ...config })
 }
 
+class EvidenceStore extends SpillStore {
+  readonly saved: SaveTextSpill[] = []
+  override saveText(input: SaveTextSpill) {
+    this.saved.push(input)
+    return Promise.resolve({ locator: SpillLocator(`/private/evidence-${this.saved.length}.json`),
+      bytes: Buffer.byteLength(input.content), retrievalHint: 'Use read with offset/limit or grep this file.' })
+  }
+}
+
+describe('bounded evidence-preserving checkpoints', () => {
+  it('regenerates an oversized draft from the original source and retains exact evidence', async () => {
+    const ctx = createContext(240000)
+    const store = new EvidenceStore(ctx)
+    const compact = service({ auto: false, summaryTargetTokens: 1024 }, ctx)
+    const session = conversation(4, 'evidence /work/proof.json address 0x180012345 '.repeat(300))
+    const original = [...session.surface.nodes]
+    compact.mutateDuringSummary = () => {
+      compact.summary = [{ type: 'text', text: compact.calls.length === 1 ? 'verbose '.repeat(700)
+        : 'Unresolved: verify 0x180012345; decisive source /work/proof.json. Next: inspect its caller.' }]
+    }
+    await compact.compactRegion(original[0]!, original.at(-1)!, agent(session, MODEL), SIGNAL)
+    expect(compact.calls).toHaveLength(2)
+    expect(compact.calls[1]!.input.messages).toEqual(compact.calls[0]!.input.messages)
+    expect(compact.calls[1]!.input.summaryBudget?.refinement).toBe(1)
+    expect(store.saved[0]!.content).toContain('0x180012345')
+    expect(JSON.parse(store.saved[0]!.content)).toMatchObject({ messages: compact.calls[0]!.input.messages })
+    const checkpointText = session.deriveMessages()[0]!.content.map(block => block.type === 'text' ? block.text : '').join('')
+    expect(checkpointText).toContain('/private/evidence-2.json')
+    expect(session.snapshotEvents().find(event => event.seq === original[0])).toBeDefined()
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(1)
+  })
+
+  it('leaves the original surface intact after bounded quality retries, without clipping the draft', async () => {
+    const compact = service({ auto: false, summaryTargetTokens: 512, summaryRefinementRetries: 1 })
+    const session = conversation(4, 'source evidence '.repeat(500))
+    const original = [...session.surface.nodes]
+    compact.summary = [{ type: 'text', text: 'uncooperative summary '.repeat(200) }]
+    await expect(compact.compactRegion(original[0]!, original.at(-1)!, agent(session, MODEL)))
+      .rejects.toThrow(/size\/savings budget/)
+    expect(compact.calls).toHaveLength(2)
+    expect(session.surface.nodes).toEqual(original)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(0)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/end')).toHaveLength(2)
+  })
+
+  it('uses text-only provider token counts to reject a deceptively small heuristic estimate', async () => {
+    const compact = service({ auto: false, summaryTargetTokens: 8192, summaryRefinementRetries: 0 })
+    const session = conversation(4, 'dense source '.repeat(3000))
+    compact.rawOutput = compact.summary
+    compact.usage = { inputTokens: 50000, outputTokens: 30000 }
+    await expect(compact.compactRegion(session.surface.nodes[0]!, session.surface.nodes.at(-1)!, agent(session, MODEL)))
+      .rejects.toThrow(/300\d\d tokens/)
+  })
+
+  it('does not count hidden reasoning as checkpoint text', async () => {
+    const compact = service({ auto: false, summaryTargetTokens: 1024 })
+    const session = conversation(4, 'source evidence '.repeat(500))
+    compact.rawOutput = [{ type: 'reasoning', text: 'internal' }, ...compact.summary]
+    compact.usage = { inputTokens: 50000, outputTokens: 30000 }
+    await expect(compact.compactRegion(session.surface.nodes[0]!, session.surface.nodes.at(-1)!, agent(session, MODEL)))
+      .resolves.toHaveProperty('summarySeq')
+  })
+
+  it('validates and merges independent summary targets and savings ratios', () => {
+    const config = resolveConfig({ summaryTargetTokens: 8192, maxSummaryRatio: 0.35,
+      modelPolicies: [{ provider: MODEL, model: MODEL, summaryTargetTokens: 4096, maxSummaryRatio: 0.2 }] })
+    expect(resolveTargetPolicy(config, { provider: MODEL, model: MODEL }))
+      .toMatchObject({ summaryTargetTokens: 4096, maxSummaryRatio: 0.2 })
+    for (const invalid of [{ summaryTargetTokens: 0 }, { maxSummaryRatio: 1.1 }, { summaryRefinementRetries: -1 }]) {
+      expect(() => resolveConfig(invalid)).toThrow()
+    }
+  })
+})
+
 async function compactIfNeeded(
   compact: BasicCompactionEngine,
   session: Session,
@@ -319,6 +394,9 @@ describe('compact configuration and defaults', () => {
       summarizationProvider: '',
       summarizationModel: '',
       maxTokens: 65_536,
+      summaryTargetTokens: 8192,
+      maxSummaryRatio: 0.35,
+      summaryRefinementRetries: 1,
       compactionRetries: 1,
       maxOverflowRetries: 1,
       modelPolicies: [],
@@ -1121,7 +1199,10 @@ describe('compaction region transaction', () => {
     await compact.compactRegion(nodes[1]!, nodes[2]!, agent(session, MODEL), SIGNAL)
 
     const { input } = compact.calls[0]!
-    expect(input).toEqual({ messages: prefix, tools })
+    expect(input.messages).toEqual(prefix)
+    expect(input.tools).toEqual(tools)
+    expect(input.summaryBudget?.tokens).toBeGreaterThan(0)
+    expect(input.summaryBudget?.refinement).toBe(0)
   })
 
   it('omits the summarizer system prompt for an empty system head or a system-less surface', async () => {
@@ -1429,6 +1510,17 @@ async function summarizerHarness(
 }
 
 describe('default one-shot summarizer', () => {
+  it('separates a checkpoint body target from the inherited 64K generation cap', async () => {
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'short checkpoint' }])
+    const session = conversation(1)
+    const output = await compact.runSummarize({ ...promptInput('exact evidence'),
+      summaryBudget: { tokens: 4096, refinement: 1 } }, agent(session, MODEL), SIGNAL)
+    expect(adapter.lastOptions?.maxTokens).toBe(8192)
+    expect(output.maxTokens).toBe(8192)
+    const instruction = adapter.lastOptions?.messages.at(-1)?.content[0]
+    expect(instruction?.type === 'text' ? instruction.text : '').toContain('at most 4096 tokens')
+    expect(instruction?.type === 'text' ? instruction.text : '').toContain('previous checkpoint was too large')
+  })
   it.each([undefined, '', 'SYSTEM HEAD\n精确前缀\n'])('preserves the routed prefix through region summarization with system %j', async (system) => {
     const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
     const session = conversation(3, undefined, system)
@@ -1730,6 +1822,19 @@ describe('automatic listener and loader composition', () => {
       () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
     )
   }
+
+  it.each(['MAX_TOKENS', 'COMPACTION_SUMMARY_DEGENERATE'])('stops instead of repeating exhausted summary failure %s at every next step', async (code) => {
+    const ctx = createContext()
+    const compact = service({ auto: true, thresholdRatio: 0.5, retainTokens: 180 }, ctx)
+    compact.error = Object.assign(new Error('summary budget exhausted'), { code })
+    const session = conversation(4)
+    const original = [...session.surface.nodes]
+    await expect(preStep(ctx, agent(session, MODEL))).rejects.toMatchObject({ code })
+    expect(compact.calls.length).toBeGreaterThan(0)
+    expect(compact.calls.length).toBeLessThanOrEqual(4)
+    expect(session.surface.nodes).toEqual(original)
+    expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(0)
+  })
 
   function recover(
     ctx: Context,

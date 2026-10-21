@@ -1,0 +1,18 @@
+- insert:
+    - id: status-evidence-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: stdio
+        serverName: status-evidence
+        command: !!js process.execPath
+        args: !!js '[process.env.DSH_MCP_STATUS_FIXTURE]'
+        failOnStartupError: true
+        reconnect:
+          enabled: false
+        toolDiscovery:
+          searchToolName: rea_find_tools
+          callToolName: rea_call
+          resultSummaries:
+            - tool: binary_session
+              fields: ['/result/open', '/result/path', '/result/analysis_activity']
+              maxInlineBytes: 1024

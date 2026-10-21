@@ -145,6 +145,26 @@ async function seedHistory(harness: LoopHarness): Promise<void> {
   harness.log.length = 0
 }
 
+it('regenerates oversized manual checkpoints through the classified failure cause and retains source events', async () => {
+  const harness = await loopHarness()
+  try {
+    await seedHistory(harness)
+    const original = [...harness.agent.session.surface.nodes]
+    harness.compact.duringSummary = () => {
+      harness.compact.summary = [{ type: 'text', text: harness.compact.calls.length === 1
+        ? 'oversized checkpoint '.repeat(150) : 'Next: inspect /work/proof.json at 0x180012345.' }]
+    }
+    await expect(harness.compact.compactNow(harness.agent, SIGNAL)).resolves.toHaveProperty('summarySeq')
+    expect(harness.compact.calls).toHaveLength(2)
+    expect(harness.compact.calls[1]!.summaryBudget?.refinement).toBe(1)
+    const events = harness.agent.session.snapshotEvents()
+    expect(events.filter(event => event.type === 'compaction/summary')).toHaveLength(1)
+    for (const seq of original) expect(events.find(event => event.seq === seq)).toBeDefined()
+  } finally {
+    await harness.ctx.fiber.dispose()
+  }
+})
+
 /** Text of every derived model-visible message, in request order. */
 function derivedText(session: Session): string[] {
   return session.deriveMessages().map((message: Message) => message.content

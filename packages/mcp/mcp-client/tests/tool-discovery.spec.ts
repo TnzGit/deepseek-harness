@@ -12,13 +12,16 @@ import { syncTools } from '../src/tools.ts'
 import { Config } from '../src/index.ts'
 import type { ToolDiscoveryConfig } from '../src/tool-discovery.ts'
 import { validateToolDiscovery } from '../src/tool-discovery.ts'
+import { SpillStore, SpillLocator, type SaveTextSpill } from '@deepseek-ai/dsh-spill'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 
 const discovery: ToolDiscoveryConfig = {
   searchToolName: 'rea_find_tools', callToolName: 'rea_call', defaultLimit: 3,
   maxLimit: 8, maxResultBytes: 16384, descriptionChars: 240,
 }
 
-async function fixture(options: Partial<ToolDiscoveryConfig> = {}) {
+async function fixture(options: Partial<ToolDiscoveryConfig> = {}, configure?: (server: McpServer) => void) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -45,6 +48,7 @@ async function fixture(options: Partial<ToolDiscoveryConfig> = {}) {
     await cancelled.promise
     return { content: [] }
   })
+  configure?.(server)
   const [a, b] = InMemoryTransport.createLinkedPair()
   const serving = serveStdio(() => server, { transport: b })
   const client = new Client({ name: 'test', version: '1' })
@@ -63,6 +67,38 @@ async function fixture(options: Partial<ToolDiscoveryConfig> = {}) {
 }
 
 describe('MCP private catalog discovery', () => {
+  it('applies an explicitly configured status view on the real MCP call without adding tool definitions', async () => {
+    const document = { result: { open: true, path: '/work/binary', capabilities: 'complete evidence '.repeat(3000) } }
+    const { ctx } = await fixture({ resultSummaries: [{ tool: 'binary_session', fields: ['/result/open', '/result/path'], maxInlineBytes: 1024 }] }, (server) => {
+      server.registerTool('binary_session', { inputSchema: z.object({}) }, async () => ({ content: [{ type: 'text', text: JSON.stringify(document) }] }))
+    })
+    const saved: SaveTextSpill[] = []
+    class Store extends SpillStore {
+      override saveText(input: SaveTextSpill) {
+        saved.push(input)
+        return Promise.resolve({ locator: SpillLocator('/private/rea-evidence.json'), bytes: Buffer.byteLength(input.content), retrievalHint: 'Read selected JSON fields from this artifact.' })
+      }
+    }
+    new Store(ctx)
+    const agent = { session: Session.create(SessionId('rea-status')) } as Agent
+    const schemas = ctx.tools.schemas()
+    const result = await ctx.tools.execute({ name: 'rea_call', arguments: { tool: 'binary_session', arguments: {} },
+      callId: ToolCallId('real-status'), signal: new AbortController().signal, agent })
+    expect(result.isError).toBe(false)
+    const text = result.content[0]?.type === 'text' ? result.content[0].text : ''
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1024)
+    expect(JSON.parse(text)).toMatchObject({ fields: [{ path: '/result/open', value: true }, { path: '/result/path', value: '/work/binary' }] })
+    expect(JSON.parse(saved[0]!.content)).toMatchObject({ content: [{ type: 'text', text: JSON.stringify(document) }] })
+    expect(ctx.tools.schemas()).toEqual(schemas)
+  })
+
+  it('rejects result views with unknown operations, duplicates, invalid pointers, or invalid byte caps', async () => {
+    await expect(fixture({ resultSummaries: [{ tool: 'missing', fields: ['/open'], maxInlineBytes: 1024 }] })).rejects.toThrow('unknown or disallowed')
+    const entry = { tool: 'open_binary', fields: ['/open'], maxInlineBytes: 1024 }
+    expect(() => { validateToolDiscovery({ ...discovery, resultSummaries: [entry, entry] }) }).toThrow('duplicate')
+    expect(() => { validateToolDiscovery({ ...discovery, resultSummaries: [{ ...entry, fields: ['not/a/pointer'] }] }) }).toThrow('JSON pointers')
+    expect(() => { validateToolDiscovery({ ...discovery, resultSummaries: [{ ...entry, maxInlineBytes: 512 }] }) }).toThrow('>= 1024')
+  })
   it('is opt-in and validates discovery names and limits', () => {
     const base = { transport: 'stdio', serverName: 'rea', command: 'rea' }
     expect(Config(base as never).toolDiscovery).toBeUndefined()

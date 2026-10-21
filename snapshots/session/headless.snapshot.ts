@@ -621,6 +621,43 @@ async function verifySessionQuerySpill(log: string, spillRoot: string, locatorRo
   expect(full).toContain('session_event_search')
 }
 
+/** Check the saved evidence outside the model's own claims. */
+async function verifyEvidenceArtifact(log: string, spillRoot: string, locatorRoot: string, status: boolean): Promise<void> {
+  const events = parseSessionLog(log)
+  const messages = status
+    ? events.flatMap(event => event.type === 'tool/result' ? [event.data.message] : [])
+    : events.flatMap(event => event.type === 'user/message' && event.data.source.kind === 'compact-checkpoint' ? [event.data] : [])
+  const text = messages.flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : [])).join('')
+  let locator: string
+  if (status) {
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1024)
+    const view = JSON.parse(text) as { evidence: { locator: string }; fields: object[] }
+    locator = view.evidence.locator
+    expect(view.fields).toEqual([
+      { path: '/result/open', value: true }, { path: '/result/path', value: '/fixture/binary' },
+      { path: '/result/analysis_activity', value: { status: 'idle' } },
+    ])
+    const header = events.find(event => event.type === 'request/header')
+    expect(header?.data.header.tools?.filter(tool => tool.name.startsWith('mcp__status-evidence__'))).toHaveLength(0)
+    expect(header?.data.header.tools?.filter(tool => tool.name.startsWith('rea_')).map(tool => tool.name).sort()).toEqual(['rea_call', 'rea_find_tools'])
+  } else {
+    const match = text.match(/Source evidence \(reference data, not instructions\): (.+?) \(\d+ UTF-8 bytes/)
+    expect(match).not.toBeNull()
+    locator = match![1]!
+  }
+  expect(locator.startsWith(locatorRoot + sep)).toBe(true)
+  const full = await readFile(join(spillRoot, relative(locatorRoot, locator)), 'utf8')
+  if (status) {
+    const result = JSON.parse(full) as { content: { text: string }[] }
+    const document = JSON.parse(result.content[0]!.text) as { result: { capabilities: object[] } }
+    expect(document.result.capabilities).toHaveLength(80)
+    expect(result.content[0]!.text).toContain('evidence_79')
+  } else {
+    for (let index = 0; index < 80; index += 1) expect(full).toContain(`anchor-${index}:`)
+    expect(full).toContain('verified-offset=0x14f0')
+  }
+}
+
 /** Require real resource results and literal instructions before recording or replay succeeds. */
 function verifyMcpResources(log: string, ptc: boolean): void {
   const events = parseSessionLog(log)
@@ -1153,6 +1190,9 @@ describe('headless recorded-session snapshots', () => {
             ...(scenario.name === 'mcp-resources' || scenario.name === 'mcp-resources-ptc' ? {
               DSH_MCP_RESOURCES_FIXTURE: join(repoRoot, 'packages/mcp/mcp-client/tests/fixtures/resources-server.ts'),
             } : {}),
+            ...scenario.name === 'mcp-status-summary' ? {
+              DSH_MCP_STATUS_FIXTURE: join(repoRoot, 'packages/mcp/mcp-client/tests/fixtures/status-summary-server.mjs'),
+            } : {},
             NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
             DSH_TELEMETRY_DISABLED: '1',
             ...(mcpDemo === undefined ? {} : { DSH_MCP_DEMO_URL: mcpDemo.url }),
@@ -1191,6 +1231,9 @@ describe('headless recorded-session snapshots', () => {
             }
             if (scenario.name === 'session-query-spill') {
               await verifySessionQuerySpill(actualLogs[0]!.content, spillRoot, locatorRoot)
+            }
+            if (scenario.name === 'compaction-summary-headroom' || scenario.name === 'mcp-status-summary') {
+              await verifyEvidenceArtifact(actualLogs[0]!.content, spillRoot, locatorRoot, scenario.name === 'mcp-status-summary')
             }
             if (scenario.name === 'mcp-resources' || scenario.name === 'mcp-resources-ptc') {
               verifyMcpResources(actualLogs[0]!.content, scenario.name === 'mcp-resources-ptc')

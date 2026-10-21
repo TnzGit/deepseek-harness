@@ -222,6 +222,8 @@ export interface McpToolDefinitionOptions {
    * @returns the external result object, validated before content projection.
    */
   call(args: Record<string, unknown>, execution: ToolExecution): Promise<unknown>
+  /** Optional model-facing text view after wire validation; canonical values and error handling stay intact. */
+  projectResult?(result: McpResult, execution: ToolExecution): Promise<ContentBlock[] | undefined>
 }
 
 /**
@@ -317,6 +319,11 @@ function createExecutor(
       const fallback: ContentBlock[] = [{ type: 'text', text: extractText(content, rawName) }]
       const projected = await prepareImageProjection(ctx, exec, content, rawName)
       projections.set(exec, { value, fallback, content: projected })
+    } else if (options.projectResult !== undefined) {
+      const projected = await options.projectResult(value, exec)
+      if (projected !== undefined) {
+        projections.set(exec, { value, fallback: [{ type: 'text', text }], content: projected })
+      }
     }
     return value
   }
