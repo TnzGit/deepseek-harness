@@ -20,6 +20,7 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { DEFAULT_MAX_INSTRUCTION_BYTES, RECONNECT_DEFAULTS, resolveReconnectPolicy, startConnection } from './connection.ts'
 import type { ReconnectConfig } from './connection.ts'
 import { registerServerContext } from './server-context.ts'
+import { validateToolDiscovery, type ToolDiscoveryConfig } from './tool-discovery.ts'
 // Side-effect type import: declaration-merges `ctx.tools` onto Context.
 import type {} from '@deepseek-ai/dsh-tools'
 
@@ -50,6 +51,8 @@ const activeServerNames = new WeakMap<object, Set<string>>()
 
 /** Config for connecting to an MCP server via a spawned child process over stdio. */
 export interface StdioConfig {
+  /** Optional two-tool discovery interface instead of advertising every upstream operation. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Selects child-process stdio transport. */
   transport: 'stdio'
   /**
@@ -78,6 +81,8 @@ export interface StdioConfig {
 
 /** Config for connecting to an MCP server over Streamable HTTP (SSE). */
 export interface StreamableHttpConfig {
+  /** Optional two-tool discovery interface instead of advertising every upstream operation. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Selects Streamable HTTP transport. */
   transport: 'streamable-http'
   /**
@@ -116,8 +121,19 @@ const Reconnect: z<ReconnectConfig> = z.object({
   maxAttempts: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(RECONNECT_DEFAULTS.maxAttempts),
 })
 
+const ToolDiscovery = z.object({
+  searchToolName: z.string().required().pattern(/^[A-Za-z0-9_-]{1,64}$/),
+  callToolName: z.string().required().pattern(/^[A-Za-z0-9_-]{1,64}$/),
+  defaultLimit: z.number().step(1).min(1).default(3),
+  maxLimit: z.number().step(1).min(1).default(8),
+  maxResultBytes: z.number().step(1).min(512).default(16384),
+  descriptionChars: z.number().step(1).min(1).default(240),
+  allowedTools: z.union([z.const(undefined), z.array(String)]),
+})
+
 export const Config = z.union([
   z.object({
+    toolDiscovery: z.union([z.const(undefined), ToolDiscovery]),
     transport: z.const('stdio'),
     serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
     command: z.string().required(),
@@ -130,6 +146,7 @@ export const Config = z.union([
     reconnect: Reconnect,
   }),
   z.object({
+    toolDiscovery: z.union([z.const(undefined), ToolDiscovery]),
     transport: z.const('streamable-http'),
     serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
     url: z.string().required(),
@@ -152,6 +169,7 @@ export const Config = z.union([
  * @returns startup readiness after connection and initial tool discovery settle.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  if (config.toolDiscovery !== undefined) validateToolDiscovery(config.toolDiscovery)
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.

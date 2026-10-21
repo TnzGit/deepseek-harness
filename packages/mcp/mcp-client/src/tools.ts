@@ -23,9 +23,12 @@ import type { ToolDefinition, ToolExecution, ToolExecutionResult } from '@deepse
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import { createDiscoveryTools, type ToolDiscoveryConfig } from './tool-discovery.ts'
 
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
+  /** Opt-in private-catalog search and invocation interface. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Whether a registry conflict is contained or rejects this synchronization. */
   registrationFailure: 'contain' | 'throw'
   serverName: string
@@ -121,7 +124,7 @@ export async function syncTools(
   const response = client.getServerCapabilities()?.tools === undefined
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh' })
-  for (const tool of response.tools) {
+  for (const tool of opts.toolDiscovery === undefined ? response.tools : []) {
     const publicName = publicToolName(opts.serverName, tool.name)
     if (definitions.has(publicName)) {
       throw new Error(
@@ -140,6 +143,12 @@ export async function syncTools(
         { signal: execution.signal, timeout: opts.toolCallTimeoutMs, toolDefinition: tool },
       ),
     }))
+  }
+
+  if (opts.toolDiscovery !== undefined) {
+    for (const definition of createDiscoveryTools(ctx, client, response.tools, opts.toolDiscovery, opts.toolCallTimeoutMs)) {
+      definitions.set(definition.name, definition)
+    }
   }
 
   // Phase 2: swap generations.

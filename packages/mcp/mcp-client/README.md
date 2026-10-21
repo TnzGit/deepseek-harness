@@ -70,6 +70,14 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try a prompt that uses one. If the initial connection fails, the harness still starts but no tools from that server appear, and an error is logged. Setting `failOnStartupError: true` rejects plugin activation; [app-boot's startup policy](../../boot/app-boot/README.md) still permits an optional MCP entry to fail without aborting the harness.
 
+### On-demand tool discovery
+
+For a large catalog, add `toolDiscovery: { searchToolName: rea_find_tools, callToolName: rea_call }` to the same MCP entry's `config`. This opt-in replaces individual upstream registrations with two stable tools on the same connection; omission retains ordinary registration. Search returns at most three candidates by default, accepts an exact raw name, and includes input schemas unless `include_schema: false` is supplied. An exact lookup returns the full description; keyword searches shorten descriptions. Pagination uses `offset` and `nextOffset`, and the complete search JSON is limited to 16,384 UTF-8 bytes. A schema that cannot fit is not truncated: the response reports the limit instead.
+
+Invocation accepts `{ "tool": "open_binary", "arguments": { "path": "/absolute/binary" } }`. The bridge validates both the envelope and selected input schema with the MCP SDK's JSON Schema validator, then preserves SDK output validation, timeout, cancellation, errors, and rich-result adaptation. The raw name and arguments remain in the normal tool-call log. The optional `allowedTools` raw-name allowlist restricts both search and invocation; unknown allowlist entries reject synchronization. Permission rules must target the configured call entrypoint and its nested `tool` argument: old `mcp__server__operation` rules do not name gateway calls. No upstream operations are registered separately in discovery mode.
+
+Search results enter ordinary tool history and can be pruned or compacted; they do not expand subsequent tool headers. No provider-specific deferred-loading protocol is required. Re-sync replaces the private catalog while the two public schemas remain stable. Server instructions and shared resource discovery retain their usual behavior.
+
 ### Tool naming and coexistence
 
 The model sees each tool under a stable server-qualified name: `mcp__<serverName>__<rawName>`, for example `mcp__github__create_issue` — the same naming shape Claude Code and Codex use. Names stay stable while the server keeps the same tool name, so session history and permission rules survive restarts and reloads. Two servers can both offer a tool named `search` and coexist as `mcp__github__search` and `mcp__web__search`.
@@ -118,6 +126,7 @@ This section explains the design decisions behind the bridge and points at the c
 | [`src/connection.ts`](src/connection.ts) | Connection supervisor: client generations, reconnect policy, attempt budget, disposal |
 | [`src/server-context.ts`](src/server-context.ts) | Resource-provider registration and literal server instructions |
 | [`src/tools.ts`](src/tools.ts) | Tool bridge: discovery, naming, registration swap, execution, image projection |
+| [`src/tool-discovery.ts`](src/tool-discovery.ts) | Opt-in bounded catalog search and validated calls without upstream tool registration |
 | [`src/transport.ts`](src/transport.ts) | Transport factory: stdio spawn with scrubbed env, Streamable HTTP |
 | — | No runtime invariant companion is published; MCP generations contribute through the tool registry, but the bridge exposes no independent server-to-tool snapshot after an asynchronous resync. |
 
@@ -161,11 +170,11 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-After discovery succeeds, SDK-admitted MCP tools appear as native tools named `mcp__<serverName>__<rawName>` (or their deterministic normalized form), with the server description and input schema. A re-sync replaces the generation; disposal or an exhausted reconnect budget removes it. A server without the tools capability connects with an empty tool set.
+After discovery succeeds, SDK-admitted MCP tools normally appear as native tools named `mcp__<serverName>__<rawName>` (or their deterministic normalized form), with the server description and input schema. With `toolDiscovery`, only the configured search and call tools appear; selected schemas arrive as search results. A re-sync replaces the generation; disposal or an exhausted reconnect budget removes it. A server without tools capability has an empty ordinary catalog or an empty searchable catalog in discovery mode.
 
 #### Token effect
 
-The tool descriptions and input schemas enter every request while the tools are registered; re-syncs replace rather than accumulate schemas, and the server-qualified name adds tokens to every tool definition and call. A configured client also enables the [shared resource tools and server-name prompt](../mcp-resources/README.md#model-experience).
+Ordinary registration sends every discovered description and input schema on each request. Discovery mode sends only two small definitions; retrieved descriptions and schemas consume bounded tool-result context until pruning or compaction. Re-syncs replace rather than accumulate definitions. A configured client also enables the [shared resource tools and server-name prompt](../mcp-resources/README.md#model-experience).
 
 #### KV Cache effect
 

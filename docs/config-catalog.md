@@ -2070,7 +2070,7 @@ export interface LspLocalServerConfig {
 ## `@deepseek-ai/dsh-mcp-client`
 
 - `inject`: `tools`
-- `source`: [`packages/mcp/mcp-client/src/index.ts:104`](../packages/mcp/mcp-client/src/index.ts)
+- `source`: [`packages/mcp/mcp-client/src/index.ts:109`](../packages/mcp/mcp-client/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -2078,6 +2078,8 @@ export type Config = StdioConfig | StreamableHttpConfig
 
 /** Config for connecting to an MCP server via a spawned child process over stdio. */
 export interface StdioConfig {
+  /** Optional two-tool discovery interface instead of advertising every upstream operation. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Selects child-process stdio transport. */
   transport: 'stdio'
   /**
@@ -2106,6 +2108,8 @@ export interface StdioConfig {
 
 /** Config for connecting to an MCP server over Streamable HTTP (SSE). */
 export interface StreamableHttpConfig {
+  /** Optional two-tool discovery interface instead of advertising every upstream operation. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Selects Streamable HTTP transport. */
   transport: 'streamable-http'
   /**
@@ -2126,6 +2130,24 @@ export interface StreamableHttpConfig {
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
+}
+
+/** Opt-in model-facing discovery names and complete response bounds. */
+export interface ToolDiscoveryConfig {
+  /** Model-facing search tool name; must differ from the call tool name. */
+  searchToolName: string
+  /** Model-facing invocation tool name; permission rules match this name and its tool argument. */
+  callToolName: string
+  /** Results returned when a search omits limit. */
+  defaultLimit: number
+  /** Maximum results in one search. */
+  maxLimit: number
+  /** Maximum UTF-8 bytes of the complete discovery JSON response. */
+  maxResultBytes: number
+  /** Maximum description characters per discovery candidate. */
+  descriptionChars: number
+  /** Optional raw MCP tool allowlist, enforced during discovery and invocation. */
+  allowedTools?: string[]
 }
 
 /** Automatic reconnect policy for one MCP server connection. */
