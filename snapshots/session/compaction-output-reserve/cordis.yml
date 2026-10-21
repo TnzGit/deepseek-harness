@@ -1,4 +1,9 @@
 # Proactive compaction with a bounded message budget.
+# This composition exercises optional storage absence; archive-backed coverage
+# lives in compaction-summary-headroom. Source events remain in the durable log.
+
+- id: spill-local
+  disabled: true
 
 - id: llm-deepseek
   config:
