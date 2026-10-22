@@ -1,6 +1,6 @@
 - button "返回插件列表": 插件列表
 - heading "子智能体" [level=3]
-- paragraph: 设置子智能体的递归层级、数量和模型。
+- paragraph: 设置子智能体的递归层级、可续接驻留数量、一次性运行并发和模型。
 - region "运行限制":
   - heading "运行限制" [level=3]
   - text: 最大递归深度
@@ -10,13 +10,20 @@
   - textbox "最大递归深度":
     - /placeholder: ""
     - text: "2"
-  - text: 子智能体并行数量上限
-  - button "子智能体并行数量上限说明"
+  - text: 可续接子智能体驻留上限
+  - button "可续接子智能体驻留上限说明"
   - text: 已覆盖
   - button "恢复默认"
-  - textbox "子智能体并行数量上限":
+  - textbox "可续接子智能体驻留上限":
     - /placeholder: ""
     - text: "12"
+  - text: 一次性子智能体并发运行上限
+  - button "一次性子智能体并发运行上限说明"
+  - text: 已覆盖
+  - button "恢复默认"
+  - textbox "一次性子智能体并发运行上限":
+    - /placeholder: ""
+    - text: "2"
 - region "模型选择":
   - heading "模型选择" [level=3]
   - text: 允许 Agent 为子智能体选择模型

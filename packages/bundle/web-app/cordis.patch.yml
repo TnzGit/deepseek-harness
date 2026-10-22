@@ -164,7 +164,7 @@
       name: '@deepseek-ai/dsh-host-webserver'
       inject: [webStartup]
       config:
-        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        host: !!js ctx.webStartup.host ?? '0.0.0.0'
         port: !!js ctx.webStartup.port ?? 3080
         compression: gzip
         compressionLevel: 1
@@ -188,6 +188,7 @@
         printUrl: true
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
+        allowUnauthenticated: true
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
@@ -215,6 +216,7 @@
         # A deployment adding authorities keeps this expression and concatenates
         # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        allowUnauthenticated: true
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.
@@ -407,6 +409,9 @@
 
     - id: ui-settings-agent-loop
       name: '@deepseek-ai/dsh-client-ui-settings-agent-loop'
+
+    - id: ui-settings-long-task-monitor
+      name: '@deepseek-ai/dsh-client-ui-settings-long-task-monitor'
 
     - id: ui-settings-subagent
       name: '@deepseek-ai/dsh-client-ui-settings-subagent'

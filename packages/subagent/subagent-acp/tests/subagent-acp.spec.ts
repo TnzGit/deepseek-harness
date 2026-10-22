@@ -775,16 +775,16 @@ describe('dsh-subagent-acp', () => {
     }
   })
 
-  it('rejects a pre-aborted request through the registered provider before cwd resolution', async () => {
+  it('rejects a pre-aborted request before provider admission or cwd resolution', async () => {
     const ctx = await setup()
     const controller = new AbortController()
-    controller.abort()
+    controller.abort(new Error('cancel before admission'))
     const parent = { id: 'parent', session: { header: {} } } as unknown as Agent
     await expect(ctx.subagents.start('acp', {
       prompt: [{ type: 'text' as const, text: 'p' }],
       parent,
       signal: controller.signal,
-    })).rejects.toThrow('subagent request was aborted before the ACP child started')
+    })).rejects.toThrow('cancel before admission')
   })
 
   it('reports an initialize-stage process exit without copying the transport error', async () => {

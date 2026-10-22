@@ -21,7 +21,13 @@ function field(text: string, rest: Partial<SettingsFieldState> = {}): SettingsFi
 }
 
 function renderCard(state: Partial<AgentLoopCardState> = {}, view: 'summary' | 'page' = 'page') {
-  const store = createSnapshotStore<AgentLoopCardState>({ ...settled, maxParallelToolCalls: field('10'), ...state })
+  const store = createSnapshotStore<AgentLoopCardState>({
+    ...settled,
+    maxParallelToolCalls: field('10'),
+    maxTokenContinuations: field('4'),
+    maxTokenContinuationOutputTokens: field('163840'),
+    ...state,
+  })
   const actions = { edit: vi.fn(), resetField: vi.fn(), save: vi.fn(), discard: vi.fn() }
   const props = { ...actions, view, t, useAgentLoopCard: bindSnapshotSelector(store) } as AgentLoopCardProps
   render(<AgentLoopCard {...props} />)
@@ -36,13 +42,18 @@ describe('AgentLoopCard', () => {
     expect(screen.queryByLabelText(en.maxParallel)).toBeNull()
   })
 
-  it('stages and saves the only field it owns', () => {
+  it('stages and saves the fields it owns', () => {
     const actions = renderCard({ dirty: true })
 
     fireEvent.change(screen.getByLabelText(en.maxParallel), { target: { value: '2' } })
     fireEvent.click(screen.getByRole('button', { name: en.save }))
 
+    fireEvent.change(screen.getByLabelText(en.maxTokenContinuations), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText(en.maxTokenContinuationOutputTokens), { target: { value: '100000' } })
+
     expect(actions.edit).toHaveBeenCalledWith('maxParallelToolCalls', '2')
+    expect(actions.edit).toHaveBeenCalledWith('maxTokenContinuations', '2')
+    expect(actions.edit).toHaveBeenCalledWith('maxTokenContinuationOutputTokens', '100000')
     expect(actions.save).toHaveBeenCalledOnce()
   })
 

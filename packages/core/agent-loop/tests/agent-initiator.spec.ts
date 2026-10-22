@@ -147,7 +147,7 @@ describe('AgentLoop initiator scope', () => {
     await ctx.fiber.dispose()
   })
 
-  it('keeps initiator identity minimal while one explicit signal spans each turn seam', async () => {
+  it('keeps initiator identity minimal while request attempts use turn-linked signals', async () => {
     const adapter = new MockAdapter([
       toolCallResponse('observe-call', 'observe', {}),
       textResponse('first done'),
@@ -196,7 +196,7 @@ describe('AgentLoop initiator scope', () => {
     await firstIdle
     const firstSignal = signals[0]
     expect(firstSignal).toBeDefined()
-    expect(new Set([...signals, ...adapter.requests.slice(0, 2).map(request => request.signal!)])).toEqual(new Set([firstSignal]))
+    expect(adapter.requests.slice(0, 2).every(request => request.signal instanceof AbortSignal && !request.signal.aborted)).toBe(true)
     expect(preStepSignals).toHaveLength(2)
     expect(new Set(preStepSignals)).toEqual(new Set([firstSignal]))
 
@@ -207,7 +207,8 @@ describe('AgentLoop initiator scope', () => {
     await secondIdle
     const secondSignal = signals[0]
     expect(secondSignal).toBeDefined()
-    expect(new Set([...signals, adapter.requests[2]!.signal!])).toEqual(new Set([secondSignal]))
+    expect(adapter.requests[2]?.signal).toBeInstanceOf(AbortSignal)
+    expect(adapter.requests[2]!.signal!.aborted).toBe(false)
     expect(preStepSignals).toHaveLength(1)
     expect(preStepSignals[0]).toBe(secondSignal)
     expect(secondSignal).not.toBe(firstSignal)

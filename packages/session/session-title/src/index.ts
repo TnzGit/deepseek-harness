@@ -89,7 +89,7 @@ export class SessionTitleInvalidError extends Error {
 }
 
 /** Automatic generation cadence owned by a registered provider. */
-export type SessionTitleAutomaticMode = 'first-prompt' | 'all-prompts'
+export type SessionTitleAutomaticMode = 'first-prompt' | 'all-prompts' | 'every-nth-prompt'
 
 /** Immutable input supplied to one title-provider call. */
 export interface SessionTitleProviderRequest {
@@ -119,6 +119,12 @@ export interface SessionTitleProvider {
   readonly id: SessionTitleProviderId
   /** When new human prompts start automatic generation. */
   readonly automatic: SessionTitleAutomaticMode
+  /**
+   * Eligible-message count between automatic revisions on the
+   * `every-nth-prompt` cadence. Prompt 1 titles immediately, then every
+   * `promptInterval` further prompts regenerate.
+   */
+  readonly promptInterval?: number
   /**
    * Produce one title revision.
    * @param request - message snapshot, current route, session, and cancellation.
@@ -504,7 +510,11 @@ export class SessionTitleService extends Service {
     const registration = this.registration
     if (registration !== undefined && !registration.closing) {
       const count = this.titleInputOf(session).count
+      const interval = registration.provider.promptInterval
       const shouldSchedule = registration.provider.automatic === 'all-prompts'
+        || (registration.provider.automatic === 'every-nth-prompt'
+          && interval !== undefined
+          && (count === 1 || (count - 1) % interval === 0))
         || (session.header.parentSession === undefined && count === 1 && this.get(session) === undefined)
       if (shouldSchedule) {
         const state = this.stateFor(session)
@@ -769,8 +779,14 @@ export class SessionTitleService extends Service {
     if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
       throw new Error('session-title provider id must be a non-empty string')
     }
-    if (candidate.automatic !== 'first-prompt' && candidate.automatic !== 'all-prompts') {
+    if (candidate.automatic !== 'first-prompt' && candidate.automatic !== 'all-prompts'
+      && candidate.automatic !== 'every-nth-prompt') {
       throw new Error('session-title provider automatic mode is invalid')
+    }
+    if (candidate.automatic === 'every-nth-prompt'
+      && (typeof candidate.promptInterval !== 'number'
+        || !Number.isInteger(candidate.promptInterval) || candidate.promptInterval < 1)) {
+      throw new Error('session-title provider promptInterval must be a positive integer')
     }
     if (typeof candidate.generate !== 'function') {
       throw new Error(`session-title provider "${candidate.id}" requires generate()`)

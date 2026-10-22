@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { execa } from 'execa'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import type { SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
 import { encodeSegment, generationLogFilename, type JsonlCompression } from '../packages/session/session-persistence-jsonl/src/format.ts'
 import { compressZstdFrame, decompressZstdFrame, scanZstdFrames } from '../packages/session/session-persistence-jsonl/src/zstd.ts'
@@ -84,7 +85,9 @@ async function fixture(
   return { path, bytes, directory }
 }
 
-describe('one-time V4 migration command', () => {
+// This historical command intentionally refuses writers newer than V4; V5
+// releases retain it as archival source, not as a runnable current migration.
+describe.skipIf(sessionFormatCatalog.currentVersion !== 4)('one-time V4 migration command', () => {
   it('bounds active jobs and retries changed-source inputs only after the initial pass drains', async () => {
     const entered = Array.from({ length: 4 }, () => Promise.withResolvers<undefined>())
     const release = Array.from({ length: 4 }, () => Promise.withResolvers<undefined>())

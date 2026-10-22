@@ -73,6 +73,116 @@ beforeEach(() => {
 })
 
 describe('PiAiAdapter provider routing', () => {
+  it('adapts the output cap when a context-window rejection names exact numbers', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.'
+      + ' Please reduce the length of the input prompt or the number of requested output tokens.'
+      + ' (parameter=input_tokens, value=95233)' } })
+    const server = await mockServer([
+      { status: 400, body: overflow },
+      { events: textEvents },
+    ])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'user' },
+      })],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(2)
+    const capOf = (request: unknown): number | undefined => {
+      const body = request as { max_tokens?: number; max_completion_tokens?: number }
+      return body.max_tokens ?? body.max_completion_tokens
+    }
+    expect(capOf(server.requests[0])).toBe(32_768)
+    expect(capOf(server.requests[1])).toBe(30_207)
+    expect(chunks.filter(chunk =>
+      typeof chunk === 'object' && chunk !== null
+      && (chunk as { type?: string }).type === 'usage')).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('readapts from the latest provider recount before surfacing context overflow', async () => {
+    const first = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains 95233 input tokens, for a total of 128001 tokens.' } })
+    const second = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 30207 output tokens"
+      + ' and your prompt contains 98000 input tokens, for a total of 128207 tokens.' } })
+    const server = await mockServer([
+      { status: 400, body: first },
+      { status: 400, body: second },
+      { events: textEvents },
+    ])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    const capOf = (request: unknown): number | undefined => {
+      const body = request as { max_tokens?: number; max_completion_tokens?: number }
+      return body.max_tokens ?? body.max_completion_tokens
+    }
+    expect(server.requests.map(capOf)).toEqual([32_768, 30_207, 27_440])
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('does not adapt from a vLLM lower-bound overflow sentinel', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains at least 95233 input tokens, for a total of at least 128001 tokens.' } })
+    const server = await mockServer([{ status: 400, body: overflow }, { events: textEvents }])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE } },
+    })
+  })
+
+  it('surfaces an exact overflow without retry when the remaining window is too small', async () => {
+    const overflow = JSON.stringify({ error: { message:
+      "This model's maximum context length is 128000 tokens. However, you requested 32768 output tokens"
+      + ' and your prompt contains 126000 input tokens, for a total of 158768 tokens.' } })
+    const server = await mockServer([{ status: 400, body: overflow }])
+    const adapter = adapterOf({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } })
+
+    const chunks: unknown[] = []
+    for await (const chunk of adapter.stream({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      maxTokens: 32_768,
+    })) chunks.push(chunk)
+
+    expect(server.requests).toHaveLength(1)
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE } },
+    })
+  })
+
   it('resolves a catalog model dynamically and uses a private endpoint', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url)
@@ -181,6 +291,21 @@ describe('PiAiAdapter provider routing', () => {
       failure: { code: 'UNSUPPORTED_REASONING_EFFORT' },
     })
     expect(server.requests).toHaveLength(2)
+  })
+
+  it.each(['compaction', 'session-title'] as const)('disables supported reasoning for %s requests', async (purpose) => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      reasoningEffort: ReasoningEffortId('max'),
+      purpose,
+      messages: [],
+    })
+
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
   })
 
   it('preserves omitted profile options when constructing the adapter directly', async () => {
@@ -411,6 +536,40 @@ describe('PiAiAdapter provider routing', () => {
         code: CONTEXT_WINDOW_EXCEEDED_CODE,
       },
     })
+  })
+
+  it('allows a longer first-chunk wait while retaining a shorter stream idle timeout', async () => {
+    const server = await mockServer([{ events: textEvents, initialDelayMs: 60 }])
+    const ctx = await harness(server.url, {
+      streamFirstChunkTimeoutMs: 200,
+      streamIdleTimeoutMs: 20,
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('times out the first chunk independently and closes the SDK request', async () => {
+    const server = await mockServer([{ events: textEvents, initialDelayMs: 200 }])
+    const ctx = await harness(server.url, {
+      streamFirstChunkTimeoutMs: 20,
+      streamIdleTimeoutMs: 200,
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(result.finish).toMatchObject({
+      kind: 'error',
+      failure: { code: 'TIMEOUT', message: 'pi-ai first chunk timeout after 20ms' },
+    })
+    await Promise.race([
+      server.responseClosed,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => { reject(new Error('SDK request did not close after first chunk timeout')) }, 1_000)
+      }),
+    ])
+    expect(server.closedResponses).toBe(1)
   })
 
   it('stops the SDK request when the adapter idle watchdog expires', async () => {
@@ -865,6 +1024,9 @@ describe('provider profile lifecycle', () => {
       { streamIdleTimeoutMs: 0 },
       { streamIdleTimeoutMs: Number.NaN },
       { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
+      { streamFirstChunkTimeoutMs: 0 },
+      { streamFirstChunkTimeoutMs: Number.NaN },
+      { streamFirstChunkTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
       { maxRequestImageBytes: 0 },
       { maxRequestImageBytes: 1.5 },
       { maxRequestImageBytes: Number.NaN },
@@ -943,6 +1105,18 @@ describe('provider profile lifecycle', () => {
     expect(() => resolveProfiles({
       openai: { streamIdleTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
     })).toThrow(/streamIdleTimeoutMs.*no greater/)
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 12_000,
+    })
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: 12_000, streamFirstChunkTimeoutMs: 900_000 },
+    }).get('openai')).toMatchObject({
+      streamIdleTimeoutMs: 12_000,
+      streamFirstChunkTimeoutMs: 900_000,
+    })
   })
 })
 

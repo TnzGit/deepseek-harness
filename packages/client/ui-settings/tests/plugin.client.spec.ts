@@ -23,6 +23,13 @@ describe('settings domain base plugin', () => {
     await vi.waitFor(() => { expect(describeCall).toHaveBeenCalledTimes(1) })
   })
 
+  it('reads Host settings for a trusted non-loopback browser', async () => {
+    const { describeCall, remote, fiber } = bench()
+    remote.$host = { home: undefined, isLoopback: false }
+    await fiber.await()
+    await vi.waitFor(() => { expect(describeCall).toHaveBeenCalledTimes(1) })
+  })
+
   it('refreshes the mirror on document commits and connection resets, once each', async () => {
     const { ctx, describeCall, remote, fiber } = bench()
     await fiber.await()

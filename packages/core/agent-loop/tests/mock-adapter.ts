@@ -12,6 +12,34 @@ export function textResponse(text: string): StreamChunk[] {
   ]
 }
 
+/** Normally stopped private reasoning, optionally followed by visible text. */
+export function reasoningResponse(reasoning: string, text?: string): StreamChunk[] {
+  const chunks: StreamChunk[] = [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: reasoning },
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } },
+  ]
+  if (text !== undefined) {
+    chunks.push(
+      { type: 'block-start', index: 1, blockType: 'text' },
+      { type: 'text-delta', index: 1, text },
+      { type: 'block-end', index: 1, block: { type: 'text', text } },
+    )
+  }
+  chunks.push(
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: reasoning.length + (text?.length ?? 0) } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  )
+  return chunks
+}
+
+/** A capped response that spends its output budget in private reasoning. */
+export function reasoningMaxTokensResponse(reasoning: string, text?: string): StreamChunk[] {
+  const chunks = reasoningResponse(reasoning, text)
+  chunks[chunks.length - 1] = { type: 'finish', reason: { kind: 'max-tokens' } }
+  return chunks
+}
+
 /**
  * Like {@link textResponse} but the stream ends with a `max-tokens` finish —
  * the model was cut off at the output-token ceiling (DeepSeek's `length`).

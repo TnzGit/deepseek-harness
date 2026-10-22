@@ -1,5 +1,16 @@
-# The summary output cap inherits the 1,800-token headroom. A 1,000-token
-# request output reservation lowers the proactive trigger to 5,582 tokens.
+- id: spill-local
+  config:
+    root: !!js process.env.DSH_SNAPSHOT_SPILL_ROOT
+
+- insert:
+    - id: snapshot-spill-locators
+      name: ../../../scripts/snapshot-spill-locators.ts
+      config:
+        root: !!js process.env.DSH_SNAPSHOT_SPILL_ROOT
+        locatorRoot: !!js process.env.DSH_SNAPSHOT_SPILL_LOCATOR_ROOT
+
+# The hard summary cap inherits 1,800-token headroom; its independent checkpoint
+# target is 512 tokens. A 1,000-token output reservation lowers the trigger to 6,200.
 
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek-api-key'
@@ -17,6 +28,8 @@
     thresholdRatio: 0.8
     headroomTokens: 1800
     retainTokens: 20
+    summaryTargetTokens: 512
+    maxSummaryRatio: 0.35
 
 - insert:
     - id: llm-replay
@@ -27,5 +40,5 @@
             name: DeepSeek
             models:
               - id: deepseek-v4-flash
-                contextWindow: 8382
+                contextWindow: 9000
                 defaultMaxTokens: 1000

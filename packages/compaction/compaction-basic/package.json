@@ -27,6 +27,7 @@
   ],
   "license": "MIT",
   "peerDependencies": {
+    "@deepseek-ai/dsh-spill": "workspace:*",
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-agent": "workspace:*",
     "@deepseek-ai/dsh-commands": "workspace:*",
@@ -37,6 +38,7 @@
     "@deepseek-ai/dsh-token-meter": "workspace:*"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-spill": { "optional": true },
     "@deepseek-ai/dsh-compaction-tool-result-pruner": {
       "optional": true
     }
@@ -46,6 +48,7 @@
     "@deepseek-ai/schemastery": "workspace:~"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-spill": "workspace:*",
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/cordis-plugin-include": "workspace:~",
     "@deepseek-ai/cordis-plugin-loader": "workspace:~",

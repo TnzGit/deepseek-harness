@@ -84,6 +84,54 @@ async function loadComposition(): Promise<Context> {
 }
 
 describe('session-title Loader composition', () => {
+  it('rewires every-N cadence through volatile Loader updates without remounting', async () => {
+    const ctx = await loadComposition()
+    const adapter = new LoaderAdapter()
+    ctx.llm.registerAdapter(['title-route'], adapter)
+    const entry = [...ctx.loader.entries()].find(candidate =>
+      candidate.options.name === '@deepseek-ai/dsh-session-title-first-prompt-llm')
+    if (entry?.fiber === undefined) throw new Error('title provider Loader entry is not mounted')
+    const fiber = entry.fiber
+
+    await entry.update({
+      config: {
+        targetWords: 5,
+        targetCjkCharacters: 10,
+        maxInputBytes: 1000,
+        maxOutputTokens: 32,
+        timeoutMs: 1000,
+        provider: 'title-route',
+        model: 'title-model',
+        mode: 'every-nth',
+        everyNPrompts: 2,
+      },
+    })
+    await ctx.loader.await()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(entry.fiber).toBe(fiber)
+
+    const session = ctx.sessions.create(SessionId('loader-title-cadence'))
+    session.append('turn/start', { turn: 1 })
+    for (const [index, text] of ['first cadence prompt', 'second cadence prompt', 'third cadence prompt'].entries()) {
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      session.append('request/header', {
+        header: { config: { provider: 'main-route', model: 'main-model' } },
+        reason: index === 0 ? 'initial' : 'change',
+      })
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+
+    expect(adapter.requests).toHaveLength(2)
+    const latest = adapter.requests[1]?.messages[0]?.content[0]
+    expect(latest?.type === 'text' && latest.text).toContain('first cadence prompt')
+    expect(latest?.type === 'text' && latest.text).toContain('second cadence prompt')
+    expect(latest?.type === 'text' && latest.text).toContain('third cadence prompt')
+  })
+
   it('loads the service and one model provider with required deployment policy', async () => {
     const ctx = await loadComposition()
     const unloaded = [...ctx.loader.entries()]

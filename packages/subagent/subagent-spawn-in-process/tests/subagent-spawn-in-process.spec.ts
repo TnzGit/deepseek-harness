@@ -180,10 +180,10 @@ describe('dsh-subagent-spawn-in-process', () => {
     // An already-aborted signal emits no future event, so start must check it before listening and
     // settle aborted without running the child. The empty model script proves no turn occurs.
     const controller = new AbortController()
-    controller.abort()
+    controller.abort(new Error('cancel before admission'))
     const { ctx, parent } = await setup([])
     await expect(start(ctx, 'spawn', { prompt: [{ type: 'text', text: 'p' }], parent, signal: controller.signal }))
-      .rejects.toThrow('aborted before child publication')
+      .rejects.toThrow('cancel before admission')
   })
 
   it('same-tick cancellation rejects start and prevents child publication', async () => {

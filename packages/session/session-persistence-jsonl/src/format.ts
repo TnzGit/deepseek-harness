@@ -465,7 +465,7 @@ export class SessionLogScanner {
   finish(): SessionLogScan {
     this.finished = true
     const artifact = this.restore.finish()
-    assertReleasedV4Relationships(artifact, KNOWN_SESSION_EVENT_TYPES)
+    assertReleasedV4Relationships(artifact, KNOWN_SESSION_EVENT_TYPES, 5)
     return {
       meta: this.meta,
       inheritedEventCount: SessionLogOffset(artifact.inheritedEventCount),

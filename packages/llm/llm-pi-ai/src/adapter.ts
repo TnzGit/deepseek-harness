@@ -38,8 +38,11 @@ import type {
   ThinkingLevel,
 } from '@earendil-works/pi-ai'
 import {
+  adaptMaxTokensForContextOverflow,
   attributionHeaders,
   contentHasImage,
+  CONTEXT_ADAPT_MAX_ATTEMPTS,
+  CONTEXT_WINDOW_EXCEEDED_CODE,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -301,16 +304,18 @@ export class PiAiAdapter extends LlmAdapter {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
     const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
-    // Only a cap the deployment configured is a request default; the
-    // catalog's `maxTokens` sizes the model and stops there.
+    // pi-ai applies Model.maxTokens when a call omits maxTokens. Expose that
+    // same effective default through the Harness seam so request/header replay
+    // and proactive compaction reserve the budget actually sent on the wire.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
+    const effectiveDefaultMaxTokens = configuredMaxTokens ?? resolvedModel.maxTokens
     return {
       provider,
       id: model,
       name: resolvedModel.name,
       inputModalities: [...resolvedModel.input],
       context: { contextWindow: resolvedModel.contextWindow },
-      ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
+      defaultMaxTokens: effectiveDefaultMaxTokens,
       ...reasoningInfo(resolvedModel, defaultLevel),
     }
   }
@@ -341,68 +346,126 @@ export class PiAiAdapter extends LlmAdapter {
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
     const model = this.modelOf(snapshot, options.provider, options.model)
-    const reasoning = resolveReasoningLevel(
-      model,
-      options.reasoningEffort ?? profile.reasoning,
-    )
+    const reasoning = options.purpose === 'compaction' || options.purpose === 'session-title'
+      ? getSupportedThinkingLevels(model).some(level => level === 'off') ? 'off' : undefined
+      : resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
-
-    const consumer = new AbortController()
-    const upstream = options.signal === undefined
-      ? consumer.signal
-      : AbortSignal.any([options.signal, consumer.signal])
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
-    using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+    const streamFirstChunkTimeoutMs = profile.streamFirstChunkTimeoutMs
+    const onReplayDegrade = (reason: string): void => {
+      this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
+    }
 
-    try {
-      const containsImage = options.messages.some(message => contentHasImage(message.content))
-      if (containsImage && !model.input.includes('image')) {
-        throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
-      }
-      const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
-      if (containsImage && attachments === undefined) {
-        throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
-      }
-      const onReplayDegrade = (reason: string): void => {
-        this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
-      }
-      const context = attachments === undefined
-        ? toPiContext(options, undefined, onReplayDegrade)
-        : await toPiContext({ ...options, signal: watchdog.signal }, {
-          attachments,
-          resolveImageAccess: ref => this.config.resolveImageAccess?.(attachments, ref),
-          maxRequestImageBytes: profile.maxRequestImageBytes,
-          requestImagePolicy: {
-            maxPixels: profile.requestImagePixelBudget,
-            maxBytes: profile.requestImageMaxBytes,
-          },
-        }, onReplayDegrade)
-      const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
-        ...options.temperature === undefined ? {} : { temperature: options.temperature },
-        ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
-        ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
-        signal: watchdog.signal,
-        // Profile headers are deployment-owned; attribution names are
-        // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
-      })
-      const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
+    // Provider recounts can shift across equivalent requests, so each bounded
+    // adaptation consumes the latest exact rejection and reduces the cap again.
+    // Lower-bound vLLM sentinels deliberately bypass adaptation and flow into
+    // the normal compaction recovery path.
+    let effectiveMaxTokens = options.maxTokens
+    let adaptationAttempts = 0
+
+    attempt: while (true) {
+      const consumer = new AbortController()
+      const upstream = options.signal === undefined
+        ? consumer.signal
+        : AbortSignal.any([options.signal, consumer.signal])
+      using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+      let receivedProviderChunk = false
+      let yieldedContent = false
       let exhausted = false
+      let iterator: AsyncIterator<StreamChunk> | undefined
+      let pendingUsage: StreamChunk | undefined
+
       try {
+        const containsImage = options.messages.some(message => contentHasImage(message.content))
+        if (containsImage && !model.input.includes('image')) {
+          throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
+        }
+        const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
+        if (containsImage && attachments === undefined) {
+          throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+        }
+        const context = attachments === undefined
+          ? toPiContext(options, undefined, onReplayDegrade)
+          : await toPiContext({ ...options, signal: watchdog.signal }, {
+            attachments,
+            resolveImageAccess: ref => this.config.resolveImageAccess?.(attachments, ref),
+            maxRequestImageBytes: profile.maxRequestImageBytes,
+            requestImagePolicy: {
+              maxPixels: profile.requestImagePixelBudget,
+              maxBytes: profile.requestImageMaxBytes,
+            },
+          }, onReplayDegrade)
+        const events = snapshot.models.streamSimple(model, context, {
+          ...profileOptions(profile, reasoning, apiKey),
+          ...options.temperature === undefined ? {} : { temperature: options.temperature },
+          ...effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens },
+          ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
+          signal: watchdog.signal,
+          // Profile headers are deployment-owned; attribution names are
+          // Harness-owned and therefore win collisions.
+          headers: requestHeaders(profile.headers),
+        })
+        iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
+
         while (true) {
-          const result = await watchdog.next(iterator)
+          const result = await watchdog.next(
+            iterator,
+            receivedProviderChunk ? streamIdleTimeoutMs : streamFirstChunkTimeoutMs,
+          )
           const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
           if (timeout !== undefined) throw timeout
           if (result.done) {
+            if (pendingUsage !== undefined) yield pendingUsage
             exhausted = true
             return
           }
-          yield result.value
+
+          receivedProviderChunk = true
+          const chunk = result.value
+          if (chunk.type === 'usage') {
+            // toStreamChunks emits terminal usage immediately before finish.
+            // Hold it until the finish reason is known so a failed adaptive
+            // attempt cannot leak duplicate usage into the successful retry.
+            pendingUsage = chunk
+            continue
+          }
+
+          if (adaptationAttempts < CONTEXT_ADAPT_MAX_ATTEMPTS && !yieldedContent
+            && chunk.type === 'finish'
+            && chunk.reason.kind === 'error'
+            && chunk.reason.failure.code === CONTEXT_WINDOW_EXCEEDED_CODE) {
+            const adapted = adaptMaxTokensForContextOverflow(
+              chunk.reason.failure.message,
+              effectiveMaxTokens,
+            )
+            if (adapted !== undefined) {
+              adaptationAttempts += 1
+              effectiveMaxTokens = adapted
+              pendingUsage = undefined
+              continue attempt
+            }
+          }
+
+          if (pendingUsage !== undefined) {
+            yield pendingUsage
+            pendingUsage = undefined
+          }
+          if (chunk.type !== 'finish') yieldedContent = true
+          yield chunk
         }
+      } catch (error: unknown) {
+        const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
+        if (timeout !== undefined) {
+          const phase = receivedProviderChunk ? 'stream idle' : 'first chunk'
+          throw new LlmError(`pi-ai ${phase} timeout after ${timeout.timeoutMs}ms`, 'TIMEOUT', { cause: error })
+        }
+        if (options.signal?.aborted) {
+          throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
+        }
+        throw error
       } finally {
-        if (!exhausted) {
-          consumer.abort('pi-ai stream consumer stopped')
+        consumer.abort('pi-ai stream consumer stopped')
+        if (!exhausted && iterator !== undefined && iterator.return !== undefined) {
           try {
             await iterator.return(undefined)
           } catch (_abortedSdkTeardown) {
@@ -410,16 +473,6 @@ export class PiAiAdapter extends LlmAdapter {
           }
         }
       }
-    } catch (error: unknown) {
-      if (timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
-        throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
-      }
-      if (options.signal?.aborted) {
-        throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
-      }
-      throw error
-    } finally {
-      consumer.abort('pi-ai stream consumer stopped')
     }
   }
 }

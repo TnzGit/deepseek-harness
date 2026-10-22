@@ -8,6 +8,7 @@
     "src"
   ],
   "references": [
+    { "path": "../../spill/spill" },
     {
       "path": "../../../vendor/cosmokit"
     },

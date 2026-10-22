@@ -42,19 +42,37 @@ describe('AgentLoopCardController', () => {
     host.publish({
       status: 'ready',
       writable: true,
-      value: { maxParallelToolCalls: 10 },
-      base: { maxParallelToolCalls: 10 },
+      value: {
+        maxParallelToolCalls: 10,
+        maxTokenContinuations: 4,
+        maxTokenContinuationOutputTokens: 163_840,
+      },
+      base: {
+        maxParallelToolCalls: 10,
+        maxTokenContinuations: 4,
+        maxTokenContinuationOutputTokens: 163_840,
+      },
       user: {},
     })
     const face = controller.inject()
 
     face.edit('maxParallelToolCalls', '4')
+    face.edit('maxTokenContinuations', '2')
+    face.edit('maxTokenContinuationOutputTokens', '100000')
     face.save()
-    await vi.waitFor(() => { expect(host.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['maxParallelToolCalls'], value: 4 }], undefined) })
+    await vi.waitFor(() => {
+      expect(host.mutate).toHaveBeenCalledWith([
+        { op: 'set', path: ['maxParallelToolCalls'], value: 4 },
+        { op: 'set', path: ['maxTokenContinuations'], value: 2 },
+        { op: 'set', path: ['maxTokenContinuationOutputTokens'], value: 100000 },
+      ], undefined)
+    })
 
     expect(face.hooks.agentLoopCard.getSnapshot()).toMatchObject({
       dirty: false,
       maxParallelToolCalls: { text: '4', overridden: true },
+      maxTokenContinuations: { text: '2', overridden: true },
+      maxTokenContinuationOutputTokens: { text: '100000', overridden: true },
     })
   })
 
@@ -62,7 +80,15 @@ describe('AgentLoopCardController', () => {
     const host = stubConfigForm<AgentLoopSettings>()
     const controller = new AgentLoopCardController(host.scope)
 
-    host.publish({ status: 'ready', writable: false, value: { maxParallelToolCalls: 10 } })
+    host.publish({
+      status: 'ready',
+      writable: false,
+      value: {
+        maxParallelToolCalls: 10,
+        maxTokenContinuations: 4,
+        maxTokenContinuationOutputTokens: 163_840,
+      },
+    })
 
     expect(controller.inject().hooks.agentLoopCard.getSnapshot().writable).toBe(false)
   })

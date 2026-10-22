@@ -25,7 +25,7 @@
     - text: 控制 Agent 派发工具调用的方式。
   - listitem:
     - button "查看 子智能体": 子智能体
-    - text: 设置子智能体的递归层级、数量和模型。
+    - text: 设置子智能体的递归层级、可续接驻留数量、一次性运行并发和模型。
   - listitem:
     - button "查看 网页搜索": 网页搜索
     - text: 设置 DeepSeek 的搜索提供方。

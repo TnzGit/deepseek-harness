@@ -34,6 +34,16 @@ async function settle(): Promise<void> {
 }
 
 describe('first-prompt LLM title provider', () => {
+  it('defaults the live cadence to first prompt with a three-prompt interval', () => {
+    const config = providerPlugin.Config(LLM_CONFIG)
+    expect(config.mode.get()).toBe('first')
+    expect(config.everyNPrompts.get()).toBe(3)
+
+    const periodic = providerPlugin.Config({ ...LLM_CONFIG, mode: 'every-nth', everyNPrompts: 5 })
+    expect(periodic.mode.get()).toBe('every-nth')
+    expect(periodic.everyNPrompts.get()).toBe(5)
+  })
+
   it('rejects an impossible empty provider request at its own boundary', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
@@ -46,7 +56,7 @@ describe('first-prompt LLM title provider', () => {
       registered = provider
       return async () => undefined
     })
-    providerPlugin.apply(ctx, LLM_CONFIG)
+    providerPlugin.apply(ctx, providerPlugin.Config(LLM_CONFIG))
 
     await expect(registered!.generate({
       session: Session.create(SessionId('empty-first-provider')),

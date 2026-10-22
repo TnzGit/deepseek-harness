@@ -12,9 +12,11 @@ function fakeParent(id = 'parent-1'): Agent {
 }
 
 function baseRequest(over: Partial<SubagentStartRequest> = {}): SubagentStartRequest {
+  const parent = fakeParent()
+  Object.assign(parent, { session: { header: {} } })
   return {
     prompt: [{ type: 'text', text: 'task' }],
-    parent: fakeParent(),
+    parent,
     signal: new AbortController().signal,
     ...over,
   }
@@ -79,9 +81,9 @@ describe('scripted subagent provider fixture', () => {
   it('rejects cancellation before or during asynchronous publication', async () => {
     const ctx = await mount()
     const alreadyAborted = new AbortController()
-    alreadyAborted.abort()
+    alreadyAborted.abort(new Error('cancel before admission'))
     await expect(ctx.subagents.start('mock', baseRequest({ signal: alreadyAborted.signal })))
-      .rejects.toThrow('scripted subagent start aborted before publication')
+      .rejects.toThrow('cancel before admission')
 
     const handoff = new AbortController()
     const pending = ctx.subagents.start('mock', baseRequest({ signal: handoff.signal }))

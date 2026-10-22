@@ -21,10 +21,14 @@ import type { Message, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { frameSummary } from './summarizer.ts'
+import { frameSummary, InefficientSummaryError } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 interface RegionDependencies {
   readonly meter: TokenMeter
+  readonly summaryTargetTokens: number
+  readonly maxSummaryRatio: number
+  readonly refinement: number
+  archive(input: SummarizationInput, start: SessionSeq, end: SessionSeq): Promise<string | undefined>
   summarize(input: SummarizationInput, agent: Agent, signal?: AbortSignal): Promise<SummaryResult>
   recover(error: unknown, agent: Agent, sourceEventSeqs: readonly SessionSeq[], signal?: AbortSignal): boolean
 }
@@ -152,6 +156,51 @@ export function selectCompactableRange(
   // oxlint-disable-next-line typescript/no-non-null-assertion
   const cutoff = surfaceNodes[keepFromIdx - 1]!
   return { start: first, end: cutoff }
+}
+
+/**
+ * Halve one failed compaction span at the nearest earlier balanced boundary.
+ * This gives a max-token or degenerate summary a monotonically smaller input
+ * instead of replaying the same oversized prefix.
+ * @param session - active Session surface.
+ * @param measurement - token pricing aligned with that surface.
+ * @param range - failed compaction span.
+ * @returns a smaller balanced span, or null when it cannot shrink.
+ */
+export function shrinkCompactableRange(
+  session: Session,
+  measurement: TokenMeasurement,
+  range: { readonly start: SessionSeq; readonly end: SessionSeq },
+): { start: SessionSeq; end: SessionSeq } | null {
+  const surfaceNodes = session.surface.nodes
+  const pricedNodes = measurement.nodes
+  if (surfaceNodes.length !== pricedNodes.length
+    || surfaceNodes.some((seq, index) => seq !== pricedNodes[index]?.seq)) {
+    throw new Error('compaction: token-meter surface does not match the current session surface')
+  }
+  const startIdx = surfaceNodes.indexOf(range.start)
+  const endIdx = surfaceNodes.indexOf(range.end)
+  if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) return null
+
+  const total = pricedNodes
+    .slice(startIdx, endIdx + 1)
+    .reduce((sum, node) => sum + node.tokens, 0)
+  const target = Math.max(1, Math.floor(total / 2))
+  let accumulated = 0
+  let firstBalanced: number | undefined
+  let preferred: number | undefined
+  for (let index = startIdx; index < endIdx; index += 1) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    accumulated += pricedNodes[index]!.tokens
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    if (!toolPairingBalancedAfter(session, surfaceNodes[index]!)) continue
+    firstBalanced ??= index
+    if (accumulated <= target) preferred = index
+  }
+  const cutoffIdx = preferred ?? firstBalanced
+  if (cutoffIdx === undefined) return null
+  // oxlint-disable-next-line typescript/no-non-null-assertion
+  return { start: range.start, end: surfaceNodes[cutoffIdx]! }
 }
 
 /**
@@ -393,11 +442,27 @@ async function summarizeCompaction(
   assertStable: StabilityCheck,
   signal?: AbortSignal,
 ): Promise<SummarizedCompaction> {
+  signal?.throwIfAborted()
+  const evidence = await dependencies.archive(prepared.input, prepared.start, prepared.end)
+  signal?.throwIfAborted()
+  const framingTokens = dependencies.meter.estimateMessage(createUserMessage({
+    content: frameSummary([], evidence),
+    source: compactCheckpointSource(compactionId, sourceCommandId),
+  }))
+  let checkpointBudget = 0
   let summaryResult: SummaryResult
   for (;;) {
     signal?.throwIfAborted()
+    checkpointBudget = Math.min(
+      Math.floor(dependencies.summaryTargetTokens / 2 ** dependencies.refinement),
+      framingTokens + Math.floor(prepared.shadowedRouteTokenCount * dependencies.maxSummaryRatio),
+    )
     try {
-      summaryResult = await dependencies.summarize(prepared.input, agent, signal)
+      summaryResult = await dependencies.summarize({
+        ...prepared.input,
+        summaryBudget: { tokens: Math.max(1, checkpointBudget - framingTokens), refinement: dependencies.refinement,
+          ...evidence === undefined ? {} : { evidence } },
+      }, agent, signal)
       break
     } catch (error: unknown) {
       if (signal?.aborted === true) throw error
@@ -408,7 +473,7 @@ async function summarizeCompaction(
     }
   }
   const checkpointMessage = createUserMessage({
-    content: frameSummary(summaryResult.summary),
+    content: frameSummary(summaryResult.summary, evidence),
     source: compactCheckpointSource(compactionId, sourceCommandId),
   })
   // The checkpoint is text-only, so its fixed-heuristic price IS its route
@@ -416,8 +481,22 @@ async function summarizeCompaction(
   // question — does the replacement lower the next request's pressure.
   const framedSummaryTokenCount = dependencies.meter.estimateMessage(checkpointMessage)
   if (framedSummaryTokenCount >= prepared.shadowedRouteTokenCount) {
-    throw new Error(
+    const Failure = framingTokens < prepared.shadowedRouteTokenCount * (1 - dependencies.maxSummaryRatio)
+      ? InefficientSummaryError : Error
+    throw new Failure(
       `summary is not smaller than the shadowed content (${framedSummaryTokenCount} estimated framed tokens >= ${prepared.shadowedRouteTokenCount})`,
+    )
+  }
+  // A text-only provider usage count protects routes whose tokenizer differs
+  // substantially from the heuristic. Reasoning tokens must not price the body.
+  const summaryTokens = Math.max(framedSummaryTokenCount,
+    summaryResult.rawOutput?.every(block => block.type === 'text') === true
+      && summaryResult.usage !== undefined
+      ? summaryResult.usage.outputTokens + framingTokens : 0)
+  if (summaryTokens > checkpointBudget) {
+    throw new InefficientSummaryError(
+      `checkpoint exceeds its size/savings budget (${summaryTokens} tokens > ${checkpointBudget}; `
+      + `source ${prepared.shadowedRouteTokenCount}); original evidence and surface remain intact`,
     )
   }
   return {

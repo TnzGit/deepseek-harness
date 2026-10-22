@@ -1,4 +1,4 @@
-/** The agent loop's settings page: how many tool calls one step may run at once. */
+/** The agent loop's settings page: tool concurrency and bounded reasoning-cap recovery. */
 
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { SettingsForm, SettingsValueField } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -35,6 +35,32 @@ export function AgentLoopCard(props: AgentLoopCardProps) {
         {...state.maxParallelToolCalls}
         onEdit={(text) => { props.edit('maxParallelToolCalls', text) }}
         onReset={() => { props.resetField('maxParallelToolCalls') }}
+      />
+      <SettingsValueField
+        id="plugin-config-agent-loop-max-token-continuations"
+        label={t('maxTokenContinuations')}
+        hint={t('maxTokenContinuationsHint')}
+        overriddenLabel={t('overridden')}
+        resetLabel={t('reset')}
+        invalidLabel={t('invalidNumber')}
+        numeric
+        disabled={!state.writable}
+        {...state.maxTokenContinuations}
+        onEdit={(text) => { props.edit('maxTokenContinuations', text) }}
+        onReset={() => { props.resetField('maxTokenContinuations') }}
+      />
+      <SettingsValueField
+        id="plugin-config-agent-loop-max-token-continuation-output"
+        label={t('maxTokenContinuationOutputTokens')}
+        hint={t('maxTokenContinuationOutputTokensHint')}
+        overriddenLabel={t('overridden')}
+        resetLabel={t('reset')}
+        invalidLabel={t('invalidNumber')}
+        numeric
+        disabled={!state.writable}
+        {...state.maxTokenContinuationOutputTokens}
+        onEdit={(text) => { props.edit('maxTokenContinuationOutputTokens', text) }}
+        onReset={() => { props.resetField('maxTokenContinuationOutputTokens') }}
       />
     </SettingsForm>
   )

@@ -13,18 +13,26 @@ import {
 export const AGENT_LOOP_NS = 'agent-loop'
 
 /**
- * The agent-loop fields this page edits. The Host section carries only this
- * field — the composed `agents` array is deliberately not part of it.
+ * User-owned agent-loop fields. The composed `agents` array is deliberately
+ * not part of this settings surface.
  */
 export interface AgentLoopSettings {
   /** Upper bound on parallel-safe tool calls in flight per step. */
   maxParallelToolCalls?: number
+  /** Automatic reasoning-only output-cap continuations allowed per turn. */
+  maxTokenContinuations?: number
+  /** Cumulative output-token ceiling for one automatic continuation chain. */
+  maxTokenContinuationOutputTokens?: number
 }
 
 /** What the agent-loop page renders. */
 export interface AgentLoopCardState extends SettingsFormShell {
   /** Parallel tool-call cap. */
   maxParallelToolCalls: SettingsFieldState
+  /** Automatic reasoning-only continuation count. */
+  maxTokenContinuations: SettingsFieldState
+  /** Automatic reasoning-only cumulative output-token budget. */
+  maxTokenContinuationOutputTokens: SettingsFieldState
 }
 
 /** The registration-side face the agent-loop page's slot entry injects. */
@@ -42,12 +50,21 @@ export class AgentLoopCardController {
 
   /** @param scope - the bound settings scope for the `agent-loop` namespace. */
   constructor(scope: SettingsFormScope<AgentLoopSettings>) {
-    this.form = new SettingsFormModel(scope, [settingsNumberField('maxParallelToolCalls')])
+    this.form = new SettingsFormModel(scope, [
+      settingsNumberField('maxParallelToolCalls'),
+      settingsNumberField('maxTokenContinuations'),
+      settingsNumberField('maxTokenContinuationOutputTokens'),
+    ])
     this.store = this.form.bind(() => this.projection())
   }
 
   private projection(): AgentLoopCardState {
-    return { ...this.form.shell(), maxParallelToolCalls: this.form.field('maxParallelToolCalls') }
+    return {
+      ...this.form.shell(),
+      maxParallelToolCalls: this.form.field('maxParallelToolCalls'),
+      maxTokenContinuations: this.form.field('maxTokenContinuations'),
+      maxTokenContinuationOutputTokens: this.form.field('maxTokenContinuationOutputTokens'),
+    }
   }
 
   /**

@@ -70,6 +70,16 @@ kind: "package-reference"
 
 启动后，服务器的工具会以 `mcp__<serverName>__<tool>` 形式出现——试着用一条提示词调用其中一个。如果初始连接失败，harness 仍会启动，但该服务器的工具不会出现，并会记录一条错误。设置 `failOnStartupError: true` 会拒绝插件激活；[app-boot 的启动策略](../../boot/app-boot/README.zh.md)仍允许可选 MCP 配置项失败，而不中止 harness。
 
+### 按需发现工具
+
+工具目录较大时，在同一 MCP 配置项的 `config` 中添加 `toolDiscovery: { searchToolName: rea_find_tools, callToolName: rea_call }`。这个显式启用选项在同一连接上用两个稳定工具替代上游逐项注册；省略时保留普通注册。搜索默认最多返回三个候选，支持精确原始名称，并默认包含输入 schema，除非指定 `include_schema: false`。精确查询返回完整描述，关键词搜索缩短描述。分页使用 `offset` 与 `nextOffset`，完整搜索 JSON 上限为 16,384 UTF-8 字节。容纳不下的 schema 不会被截断；响应会明确说明上限。
+
+调用接受 `{ "tool": "open_binary", "arguments": { "path": "/absolute/binary" } }`。桥接使用 MCP SDK 的 JSON Schema 校验器验证调用封装及所选输入 schema，并保留 SDK 输出校验、超时、取消、错误与富结果适配。原始名称和参数保留在正常工具调用日志中。可选的 `allowedTools` 原始名称允许列表同时限制搜索与调用；允许列表中的未知名称会拒绝同步。权限规则必须匹配配置的调用入口及其嵌套 `tool` 参数：原有 `mcp__server__operation` 规则不匹配网关调用。按需发现模式不单独注册任何上游操作。
+
+搜索结果进入普通工具历史，可以裁剪或压缩，不会扩大后续请求的工具头。不需要模型提供商专用的延迟加载协议。重新同步替换私有目录，两个公开 schema 保持稳定。服务器指令和共享资源发现保留原有行为。
+
+对于冗长的 JSON 状态操作，可显式配置 `toolDiscovery.resultSummaries`，例如 `[{ tool: binary_session, fields: ['/result/open', '/result/cleanup_pending', '/result/analysis_activity'], maxInlineBytes: 4096 }]`。配置项指定精确的已允许操作与 RFC 6901 指针（最多 32 个、每个最多 200 字符）。桥接器先通过 `spillStore` 保存完整且已验证的 MCP 值，再展示选中字段与回查引用。过大字段只给引用而不截断；完整内联 JSON 的字节预算包含元数据。程序侧规范值保持完整，工具定义不会增长。缺少存储、非 JSON 或非文本结果、存储失败或引用本身过大时保留普通视图；提供方错误绝不做摘要。完整证据可通过原生 read/grep 或 JSON 解析读取保存的 MCP 外层结构（`structuredContent`，或解析 `content[0].text`）。文件保留期遵循 spill 后端。省略配置时所有结果保持原样。
+
 ### 工具命名与共存
 
 模型看到每个工具都带有稳定的服务器限定名称：`mcp__<serverName>__<rawName>`，例如 `mcp__github__create_issue`——与 Claude Code 和 Codex 使用的命名形态相同。只要服务器保持相同的工具名称，名称就保持不变，因此会话历史与权限规则在重启和重载后仍然有效。两个服务器可以同时提供名为 `search` 的工具，分别以 `mcp__github__search` 和 `mcp__web__search` 共存。
@@ -118,6 +128,7 @@ kind: "package-reference"
 | [`src/connection.ts`](src/connection.ts) | 连接监督器：客户端世代、重连策略、尝试预算、dispose（资源释放） |
 | [`src/server-context.ts`](src/server-context.ts) | 资源提供方注册与字面服务器指令 |
 | [`src/tools.ts`](src/tools.ts) | 工具桥接：发现、命名、注册交换、执行、图片投影 |
+| [`src/tool-discovery.ts`](src/tool-discovery.ts) | 显式启用的有界目录搜索与校验调用，不注册上游工具 |
 | [`src/transport.ts`](src/transport.ts) | 传输工厂：带清洗环境的 stdio spawn、Streamable HTTP |
 | — | 不发布运行时不变式伴生入口；MCP 世代会通过工具注册表发挥作用，但桥接在异步重新同步后不提供独立的服务器工具映射快照。 |
 
@@ -161,11 +172,11 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器�
 
 #### 模型看到什么
 
-发现成功后，SDK 接受的 MCP 工具以原生工具名称 `mcp__<serverName>__<rawName>`（或其确定性规范化形式）出现，携带服务器描述和输入 schema。重新同步会替换注册代；释放或重连预算耗尽会移除工具。未声明 tools 能力的服务器以空工具集连接。
+发现成功后，SDK 接受的 MCP 工具通常以原生工具名称 `mcp__<serverName>__<rawName>`（或其确定性规范化形式）出现，携带服务器描述和输入 schema。启用 `toolDiscovery` 后，仅公开配置的搜索与调用工具；选中 schema 通过搜索结果进入上下文。重新同步会替换注册代；释放或重连预算耗尽会移除工具。未声明 tools 能力的服务器在普通模式下目录为空，按需发现模式下可搜索目录为空。
 
 #### Token 影响
 
-工具注册期间，工具描述与输入 schema 会进入每次请求；重新同步会替换而非累积 schema，服务器限定名称也会为每个工具定义和调用增加 token。已配置客户端还会启用[共享资源工具与服务器名称提示词](../mcp-resources/README.zh.md#model-experience)。
+普通注册在每次请求中发送所有已发现的描述与输入 schema。按需发现模式仅发送两个小型定义；取回的描述和 schema 在裁剪或压缩前占用有界工具结果上下文。重新同步替换而非累积定义。已配置客户端还会启用[共享资源工具与服务器名称提示词](../mcp-resources/README.zh.md#model-experience)。
 
 #### KV Cache 影响
 

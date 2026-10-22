@@ -889,7 +889,7 @@
     "506ab076906011d029fcc987ce50c3c656430e3f20814786cad7ec32ff2bb77c": 1
   },
   "packages/core/agent-loop/tests/loop.spec.ts": {
-    "52faf4558fcd91bd27dbdfa7e497843e8eeb75ea5f68ee231335018d5b3f2053": 13,
+    "52faf4558fcd91bd27dbdfa7e497843e8eeb75ea5f68ee231335018d5b3f2053": 12,
     "96465479e2917a67964dd7a63395b95c80c701d4d8815263cd5f234d0e21dd95": 1
   },
   "packages/core/agent-loop/tests/request-reconstruction.spec.ts": {
@@ -1659,12 +1659,6 @@
   "packages/session/session-format-v3-to-v4/src/codec.ts": {
     "5a8270cf9b1e554ae0cff6eaf7086e44c22f61a08e5f91dc7e1397eccaa726a5": 2
   },
-  "packages/session/session-format-v3-to-v4/tests/attribution.spec.ts": {
-    "7705a694f19a2409a0d8bc84036a0a0144755e5f2aa8795e8ab657564927d394": 1
-  },
-  "packages/session/session-format-v3-to-v4/tests/developer-relationships.spec.ts": {
-    "b7b0048f08f63c22d5c0a9cc512a95f7ae9bd5188181f703058deff58b0edc68": 1
-  },
   "packages/session/session-format-v3-to-v4/tests/fork.spec.ts": {
     "0311422ffc9c766724a844aede6e2bcb77cb52cee8d1bee59bc18634193d354f": 1
   },
@@ -1951,8 +1945,7 @@
   },
   "packages/subagent/subagent/tests/service.spec.ts": {
     "41a1501a36d265ae52c5893b26e9e92eacc1012a379afb2948a31d153bcbac2a": 1,
-    "514d368a1007506da97412cee4b14191025685d1693f2c68442bb466b5054e02": 1,
-    "e770821c1f637aca0a346d5f6e6f0873ca4d7e3b070b557cddf773c160ec599a": 1
+    "514d368a1007506da97412cee4b14191025685d1693f2c68442bb466b5054e02": 1
   },
   "packages/subagent/tool-subagent/src/index.ts": {
     "11233be4a60a9dfb99acc5fbf90c5185c2101516379f3224866557301bbb048c": 1,

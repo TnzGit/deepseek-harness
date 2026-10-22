@@ -32,8 +32,15 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { ReactLoopAgent } from './agent.ts'
+export type { DegenerateResponseEventData } from './degenerate-response.ts'
+export type { MaxTokenContinuationEventData } from './max-token-continuation.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
-import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
+import { agentRecoveryProjectionDefinition } from './recovery-projection.ts'
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  DEFAULT_MAX_TOKEN_CONTINUATIONS,
+  DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS,
+} from './constants.ts'
 import type {} from './runtime-context.ts'
 
 /** Fiber states that cannot own or serve a new lifecycle. */
@@ -239,7 +246,11 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export { DEFAULT_MAX_PARALLEL_TOOL_CALLS }
+export {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  DEFAULT_MAX_TOKEN_CONTINUATIONS,
+  DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS,
+}
 
 /**
  * One launcher-selected session identity for a configured agent. `resume`
@@ -295,6 +306,13 @@ export interface Config {
    * omission defaults to {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}.
    */
   maxParallelToolCalls: Volatile<number>
+  /**
+   * Maximum automatic reasoning-only output-cap continuations per turn.
+   * Zero disables the recovery.
+   */
+  maxTokenContinuations: Volatile<number>
+  /** Maximum cumulative output tokens spent by one continuation chain. */
+  maxTokenContinuationOutputTokens: Volatile<number>
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -331,8 +349,16 @@ export class AgentLoop extends Service implements AgentFactory {
   static inject = ['agents', 'sessions', 'llm', 'tools', 'systemPrompt', 'sessionProjections']
 
   /** Runtime schema for declarative agents. */
-  static Config: z<{ agents?: Config['agents']; maxParallelToolCalls?: number }, Config> = z.object({
+  static Config: z<{
+    agents?: Config['agents']
+    maxParallelToolCalls?: number
+    maxTokenContinuations?: number
+    maxTokenContinuationOutputTokens?: number
+  }, Config> = z.object({
     maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS).volatile(),
+    maxTokenContinuations: z.number().step(1).min(0).default(DEFAULT_MAX_TOKEN_CONTINUATIONS).volatile(),
+    maxTokenContinuationOutputTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER)
+      .default(DEFAULT_MAX_TOKEN_CONTINUATION_OUTPUT_TOKENS).volatile(),
     agents: z.array(z.object({
       id: z.string().required(),
       sessionId: z.string().min(1),
@@ -343,7 +369,12 @@ export class AgentLoop extends Service implements AgentFactory {
       cwd: z.string(),
       resumeSessionId: z.string(),
     })).default([]),
-  }) as z<{ agents?: Config['agents']; maxParallelToolCalls?: number }, Config>
+  }) as z<{
+    agents?: Config['agents']
+    maxParallelToolCalls?: number
+    maxTokenContinuations?: number
+    maxTokenContinuationOutputTokens?: number
+  }, Config>
 
   /** Validated configuration owned by the agent-loop service. */
   readonly config: Config
@@ -357,12 +388,15 @@ export class AgentLoop extends Service implements AgentFactory {
     this.config = {
       agents: applyLauncherIdentities(config.agents, ctx.get(CONFIGURED_AGENT_IDENTITIES_KEY)),
       maxParallelToolCalls: config.maxParallelToolCalls,
+      maxTokenContinuations: config.maxTokenContinuations,
+      maxTokenContinuationOutputTokens: config.maxTokenContinuationOutputTokens,
     }
     validateConfiguredAgents(this.config.agents)
     // Register only after every config validation above has passed, so a
     // rejected constructor leaves no projection unit behind.
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
     ctx.sessionProjections.register(inboxProjectionDefinition)
+    ctx.sessionProjections.register(agentRecoveryProjectionDefinition)
     this.ownership = new FactoryOwnership(ctx.fiber)
     this.runtime = { ctx }
     ctx.effect(() => () => this.ownership.dispose(), 'agentLoop.transactions()')

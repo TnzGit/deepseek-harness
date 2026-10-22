@@ -345,6 +345,30 @@ describe('connection node half', () => {
     await dispose()
   })
 
+  it('admits trusted LAN requests without a cookie only with the explicit no-auth option', async () => {
+    const { routes, connection, dispose } = await mounted({
+      trustedHosts: ['192.168.1.5'],
+      allowUnauthenticated: true,
+    })
+    try {
+      const trusted = fakeRequest({ host: '192.168.1.5:3080' })
+      const untrusted = fakeRequest({ host: 'attacker.example:3080' })
+      expect(connection.requestRejection(trusted)).toBeUndefined()
+      expect(connection.requestRejection(untrusted)).toBe(403)
+      expect(connection.authenticatedUrl('http://192.168.1.5:3080/')).toBe('http://192.168.1.5:3080/')
+      expect(connection.authorizeIndex(trusted, fakeResponse().response)).toBe(true)
+
+      const allowed = fakeResponse()
+      await routes[0]!.handler(trusted, allowed.response)
+      expect(allowed.state.status).toBe(404)
+      const denied = fakeResponse()
+      await routes[0]!.handler(untrusted, denied.response)
+      expect(denied.state.status).toBe(403)
+    } finally {
+      await dispose()
+    }
+  })
+
   it('provides a disposable dedicated RPC channel', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []

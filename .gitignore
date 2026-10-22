@@ -46,3 +46,6 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+
+# Graft's generated graph and cards stay outside git and native source searches.
+/graft/

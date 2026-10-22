@@ -1,16 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createAssistantMessage, createUserMessage, DEGENERATE_RESPONSE_CODE, ToolCallId, LlmError, ReasoningEffortId, StreamChunk, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent, type AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, maxTokensResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
+import { withDegenerateRecovery } from '../src/degenerate-response.ts'
+import { MockAdapter, maxTokensResponse, reasoningMaxTokensResponse, reasoningResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -28,7 +29,14 @@ function driverDone(agent: Agent): Promise<void> {
   return (agent as Agent & { done: Promise<void> }).done
 }
 
-async function harness(adapter: MockAdapter, persona = '') {
+async function harness(
+  adapter: MockAdapter,
+  persona = '',
+  loopOverrides: {
+    maxTokenContinuations?: number
+    maxTokenContinuationOutputTokens?: number
+  } = {},
+) {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -36,7 +44,7 @@ async function harness(adapter: MockAdapter, persona = '') {
   await ctx.plugin(SystemPrompt, { personaPrefix: persona })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: [], ...loopOverrides })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }
@@ -180,6 +188,257 @@ describe('agent loop', () => {
       type: 'turn/end',
       data: { reason: { kind: 'error' } },
     })
+  })
+
+  it.each([
+    ['reasoning followed by punctuation', reasoningResponse('Let me write the parser.', '.')],
+    ['reasoning without visible text', reasoningResponse('I should continue implementing this')],
+  ])('recovers once from %s without persisting the internal prompt', async (_label, degenerate) => {
+    const adapter = new MockAdapter([degenerate, textResponse('implementation complete')])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('degenerate-recovery'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'implement the parser')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    const recovery = adapter.requests[1]!.messages.at(-1)
+    expect(recovery?.source).toEqual({ kind: 'agent-loop-degenerate-recovery' })
+    const recoveryText = recovery?.content.find(block => block.type === 'text')
+    expect(recoveryText?.type === 'text' && recoveryText.text)
+      .toContain('without producing a usable final answer or tool call')
+    expect(userTexts(agent)).toEqual(['implement the parser'])
+    expect(agent.session.deriveMessages().some(message =>
+      message.source.kind === 'agent-loop-degenerate-recovery')).toBe(false)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message'))
+      .toHaveLength(1)
+  })
+
+  it('surfaces DEGENERATE_RESPONSE after one recovery instead of looping', async () => {
+    const adapter = new MockAdapter([
+      reasoningResponse('I will act now', '.'),
+      reasoningResponse('Trying again', '...'),
+      textResponse('must not be requested'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('repeated-degenerate'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'continue the work')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(0)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt')).toHaveLength(2)
+    const turnEnd = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' && turnEnd.data.reason).toMatchObject({
+      kind: 'error',
+      error: { code: DEGENERATE_RESPONSE_CODE },
+    })
+  })
+
+  it('cuts off repeated punctuation reasoning during streaming and recovers once', async () => {
+    const adapter = new MockAdapter([
+      reasoningResponse('!'.repeat(96)),
+      textResponse('recovered from repetition'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('stream-repetition-recovery'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'find the plugin')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests[1]!.messages.at(-1)?.source)
+      .toEqual({ kind: 'agent-loop-degenerate-recovery' })
+    const recovery = agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')
+    expect(recovery).toHaveLength(1)
+    expect(recovery[0]?.type === 'agent/degenerate-response' && recovery[0].data).toMatchObject({
+      attempt: 1,
+      action: 'retry',
+      finishKind: 'stream-repetition',
+      repeatedCharacter: '!',
+      repeatedCharacters: 64,
+    })
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+    const assistantMessages = agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')
+    expect(assistantMessages).toHaveLength(1)
+    expect(assistantMessages[0]?.type === 'assistant/message' && assistantMessages[0].data.message.content)
+      .toEqual([{ type: 'text', text: 'recovered from repetition' }])
+  })
+
+  it('keeps contaminated interrupted reasoning visible but excludes it from model replay', () => {
+    const contaminated = createAssistantMessage({
+      content: [{ type: 'reasoning', text: '!'.repeat(40) }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+    const ordinary = createAssistantMessage({
+      content: [{ type: 'reasoning', text: 'I should inspect the repository.' }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+    const shortPunctuation = createAssistantMessage({
+      content: [{ type: 'reasoning', text: '!!!' }],
+      source: { provider: 'mock', model: 'mock' },
+    })
+
+    expect(withDegenerateRecovery([], [contaminated, ordinary, shortPunctuation]))
+      .toEqual([ordinary, shortPunctuation])
+  })
+
+  it.each(['OK', '✅'])('accepts the short visible answer %s', async (answer) => {
+    const adapter = new MockAdapter([reasoningResponse('Short answer is sufficient', answer)])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId(`valid-short-${answer}`), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'answer briefly')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(1)
+  })
+
+  it('recovers a provider-normalized EMPTY_RESPONSE through the same one-shot path', async () => {
+    const adapter = new MockAdapter([
+      [
+        { type: 'usage', usage: { inputTokens: 10, outputTokens: 0 } },
+        { type: 'finish', reason: { kind: 'error', failure: { code: 'EMPTY_RESPONSE', message: 'empty' } } },
+      ],
+      textResponse('recovered'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('normalized-empty-response'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'do the work')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/degenerate-response')).toHaveLength(1)
+  })
+
+  it('continues a reasoning-only max-token finish in a new step with the same request settings', async () => {
+    const effort = ReasoningEffortId('high')
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('I need to inspect the next dependency.'),
+      textResponse('finished after continuation'),
+    ], {
+      efforts: [{ id: effort, name: 'High' }],
+      defaultEffort: effort,
+    })
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('reasoning-cap-continuation'), {
+      provider: 'mock',
+      model: 'mock',
+      reasoningEffort: effort,
+      maxTokens: 32,
+    })
+
+    send(agent, 'continue until done')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(adapter.requests.map(request => request.reasoningEffort)).toEqual([effort, effort])
+    expect(adapter.requests.map(request => request.maxTokens)).toEqual([32, 32])
+    const secondTexts = adapter.requests[1]!.messages.flatMap(message =>
+      message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
+    expect(secondTexts.some(text => text.includes('Internal reasoning checkpoint'))).toBe(true)
+    expect(secondTexts.some(text => text.includes('Continue from the internal reasoning checkpoint'))).toBe(true)
+    const continuation = agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation')
+    expect(continuation).toHaveLength(1)
+    expect(continuation[0]?.type === 'agent/max-token-continuation' && continuation[0].data).toMatchObject({
+      turn: 1,
+      step: 1,
+      continuationStep: 2,
+      attempt: 1,
+    })
+    const restored = Session.fromRestore(
+      agent.session.id, agent.session.snapshotEvents(), agent.session.header,
+      agent.session.inheritedEventCount, 'detached',
+    )
+    expect(ctx.sessionProjections.stateOf(restored, 'agentRecovery'))
+      .toEqual(ctx.sessionProjections.stateOf(agent.session, 'agentRecovery'))
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
+  it('stops a continuation when the capped reasoning repeats the preceding checkpoint', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('same checkpoint reasoning'),
+      reasoningMaxTokensResponse('same checkpoint reasoning'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('repeated-reasoning-cap'), {
+      provider: 'mock', model: 'mock', maxTokens: 64,
+    })
+
+    send(agent, 'solve this')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(1)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens', autoContinuation: 'exhausted' } } })
+  })
+
+  it('does not auto-continue a capped response that already exposed visible text', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('private work', 'partial answer'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('visible-max-token'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
+    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'max-tokens' } } })
+  })
+
+  it('allows reasoning-only continuation to be disabled by configuration', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('private work only'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter, '', { maxTokenContinuations: 0 })
+    const agent = await ctx.agentLoop.create(SessionId('disabled-max-token-continuation'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
+  })
+
+  it('bounds reasoning-only continuation by cumulative output tokens', async () => {
+    const adapter = new MockAdapter([
+      reasoningMaxTokensResponse('1234567890'),
+      textResponse('must not run'),
+    ])
+    const ctx = await harness(adapter, '', { maxTokenContinuationOutputTokens: 5 })
+    const agent = await ctx.agentLoop.create(SessionId('max-token-output-budget'), {
+      provider: 'mock', model: 'mock',
+    })
+
+    send(agent, 'answer')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/max-token-continuation'))
+      .toHaveLength(0)
   })
 
   it('settles a failed attempt before retrying with a new dense attempt', async () => {
@@ -1479,10 +1738,8 @@ describe('agent loop', () => {
     }])
   })
 
-  it('appends an empty completion anchor for a normal stop with no usage', async () => {
-    // A clean content-less call stays absent from derived messages but remains
-    // a durable successful-call boundary for replay consumers.
-    const adapter = new MockAdapter([[{ type: 'finish', reason: { kind: 'stop' } }]])
+  it('retries a content-less stop with no usage without adding an empty assistant message', async () => {
+    const adapter = new MockAdapter([[{ type: 'finish', reason: { kind: 'stop' } }], textResponse('recovered')])
     const ctx = await harness(adapter)
     const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
 
@@ -1493,6 +1750,7 @@ describe('agent loop', () => {
     await waitForIdle(ctx, agent)
 
     expect(reasons).toEqual([{ kind: 'completed' }])
+    expect(agent.session.snapshotEvents().filter(e => e.type === 'agent/degenerate-response')).toHaveLength(1)
     const assistant = agent.session.snapshotEvents().find(e => e.type === 'assistant/message')!
     expect(assistant.type === 'assistant/message' && assistant.data).toMatchObject({
       turn: 1,
@@ -1500,18 +1758,12 @@ describe('agent loop', () => {
       message: {
         id: expect.any(String) as unknown,
         role: 'assistant',
-        content: [],
+        content: [{ type: 'text', text: 'recovered' }],
         source: { kind: 'model', provider: 'mock', model: 'mock' },
       },
     })
     expect(assistant.sourceEventSeqs).toBeUndefined()
-    expect(assistant.type === 'assistant/message' ? assistant.data.stream.length : 0).toBe(1)
-    expect(agent.session.deriveMessages().slice(1)).toEqual([{
-      id: expect.any(String) as unknown,
-      role: 'user',
-      content: [{ type: 'text', text: 'go' }],
-      source: { kind: 'user' },
-    }])
+    expect(agent.session.deriveMessages().slice(1).map(message => message.role)).toEqual(['user', 'assistant'])
   })
 
   it('keeps safe max-tokens assistant content while dropping truncated tool calls', async () => {

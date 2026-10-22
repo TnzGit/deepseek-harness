@@ -1,0 +1,49 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/session/session-format-v4-to-v5/README.md
+/:
+  en: 09505d96ff8d756e
+  zh: 84772c3a67e53381
+/deepseek-ai-dsh-session-format-v4-to-v5:
+  en: 5c911c36fc777867
+  zh: 523c41bb93008361
+/deepseek-ai-dsh-session-format-v4-to-v5/summary:
+  en: 32dc8c5461693687
+  zh: 822c54755c58a2f0
+/deepseek-ai-dsh-session-format-v4-to-v5/table-of-contents:
+  en: caa3817d3121b249
+  zh: 75c0c6f6c4c2f5f8
+/deepseek-ai-dsh-session-format-v4-to-v5/use-this-package:
+  en: e69c909573682d40
+  zh: 8add6dc70a9c78a9
+/deepseek-ai-dsh-session-format-v4-to-v5/v4-to-v5-specification:
+  en: 67aa11fef6e67017
+  zh: c254f15bbf11d3ab
+/deepseek-ai-dsh-session-format-v4-to-v5/understand-the-implementation:
+  en: 8b6eaae1f9c9dda0
+  zh: f18b8cf579e39905
+/deepseek-ai-dsh-session-format-v4-to-v5/further-exploration:
+  en: bf5ae06a758805b2
+  zh: 694607822fc04015
+/deepseek-ai-dsh-session-format-v4-to-v5/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-session-format-v4-to-v5/model-experience/historical-restoration:
+  en: e63dd8ef6de7cf7c
+  zh: f1e356f01b601079
+/deepseek-ai-dsh-session-format-v4-to-v5/model-experience/historical-restoration/what-the-model-sees:
+  en: de09675562ad9e3c
+  zh: ae0c9a1e7d67c8c6
+/deepseek-ai-dsh-session-format-v4-to-v5/model-experience/historical-restoration/token-effect:
+  en: fa06653655fe7db7
+  zh: f240c4684e3f66bc
+/deepseek-ai-dsh-session-format-v4-to-v5/model-experience/historical-restoration/kv-cache-effect:
+  en: c82b75d0536bc577
+  zh: b9590b13d2d2bdc2
+/deepseek-ai-dsh-session-format-v4-to-v5/known-limitations-and-deferred-work:
+  en: 1ca5d024f883166a
+  zh: a9e4c47a43f7c04f
+/deepseek-ai-dsh-session-format-v4-to-v5/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: ae667d799d301b40

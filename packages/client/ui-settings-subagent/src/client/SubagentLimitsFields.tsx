@@ -13,7 +13,7 @@ export type SubagentLimitsFieldsProps = PropsLocale<'settings.subagent'>
 /**
  * Render the depth and capacity fields with their original validation and reset behavior.
  * @param props - Locale, staged fields, and edit callbacks.
- * @returns Two responsive fields and their application rules.
+ * @returns Three responsive fields and their application rules.
  */
 export function SubagentLimitsFields(props: SubagentLimitsFieldsProps) {
   const { t, state } = props
@@ -50,6 +50,13 @@ export function SubagentLimitsFields(props: SubagentLimitsFieldsProps) {
             resetLabel={t('reset')} invalidLabel={t('subagentCapacityInvalid')}
             numeric disabled={!state.writable || state.saving} {...state.maxActiveSubagents}
             onEdit={(text) => { props.edit('maxActiveSubagents', text) }} onReset={() => { props.resetField('maxActiveSubagents') }} />
+        </div>
+        <div className={css.limit}>
+          <SettingsValueField id="plugin-config-subagent-concurrent-runs" label={t('subagentMaxConcurrent')}
+            help={{ label: t('subagentConcurrentHelpLabel'), content: <p>{t('subagentConcurrentHelp')}</p> }} overriddenLabel={t('overridden')}
+            resetLabel={t('reset')} invalidLabel={t('subagentConcurrentInvalid')}
+            numeric disabled={!state.writable || state.saving} {...state.maxConcurrentRuns}
+            onEdit={(text) => { props.edit('maxConcurrentRuns', text) }} onReset={() => { props.resetField('maxConcurrentRuns') }} />
         </div>
       </div>
     </>

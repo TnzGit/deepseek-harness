@@ -22,6 +22,12 @@ export interface CompactionPolicyConfig {
   summarizationModel?: string
   /** Provider generation cap for summarization. Defaults to the resolved `headroomTokens`; an explicit cap must be positive. */
   maxTokens?: number
+  /** Target maximum framed checkpoint size, independent of the generation cap. Defaults to `8192` tokens. */
+  summaryTargetTokens?: number
+  /** Maximum summary-body/source token ratio; framing is additionally allowed. Defaults to `0.35`. */
+  maxSummaryRatio?: number
+  /** Regenerations of an oversized checkpoint before leaving the original surface intact. Defaults to `1`. */
+  summaryRefinementRetries?: number
   /** Extra attempts after the first compaction when pressure remains above threshold. Defaults to `1`. */
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
@@ -56,6 +62,9 @@ interface ResolvedPolicyFields {
   readonly summarizationProvider: string
   readonly summarizationModel: string
   readonly maxTokens: number
+  readonly summaryTargetTokens: number
+  readonly maxSummaryRatio: number
+  readonly summaryRefinementRetries: number
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
 }

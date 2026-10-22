@@ -23,9 +23,12 @@ import type { ToolDefinition, ToolExecution, ToolExecutionResult } from '@deepse
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import { createDiscoveryTools, type ToolDiscoveryConfig } from './tool-discovery.ts'
 
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
+  /** Opt-in private-catalog search and invocation interface. */
+  toolDiscovery?: ToolDiscoveryConfig
   /** Whether a registry conflict is contained or rejects this synchronization. */
   registrationFailure: 'contain' | 'throw'
   serverName: string
@@ -121,7 +124,7 @@ export async function syncTools(
   const response = client.getServerCapabilities()?.tools === undefined
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh' })
-  for (const tool of response.tools) {
+  for (const tool of opts.toolDiscovery === undefined ? response.tools : []) {
     const publicName = publicToolName(opts.serverName, tool.name)
     if (definitions.has(publicName)) {
       throw new Error(
@@ -140,6 +143,12 @@ export async function syncTools(
         { signal: execution.signal, timeout: opts.toolCallTimeoutMs, toolDefinition: tool },
       ),
     }))
+  }
+
+  if (opts.toolDiscovery !== undefined) {
+    for (const definition of createDiscoveryTools(ctx, client, response.tools, opts.toolDiscovery, opts.toolCallTimeoutMs)) {
+      definitions.set(definition.name, definition)
+    }
   }
 
   // Phase 2: swap generations.
@@ -213,6 +222,8 @@ export interface McpToolDefinitionOptions {
    * @returns the external result object, validated before content projection.
    */
   call(args: Record<string, unknown>, execution: ToolExecution): Promise<unknown>
+  /** Optional model-facing text view after wire validation; canonical values and error handling stay intact. */
+  projectResult?(result: McpResult, execution: ToolExecution): Promise<ContentBlock[] | undefined>
 }
 
 /**
@@ -308,6 +319,11 @@ function createExecutor(
       const fallback: ContentBlock[] = [{ type: 'text', text: extractText(content, rawName) }]
       const projected = await prepareImageProjection(ctx, exec, content, rawName)
       projections.set(exec, { value, fallback, content: projected })
+    } else if (options.projectResult !== undefined) {
+      const projected = await options.projectResult(value, exec)
+      if (projected !== undefined) {
+        projections.set(exec, { value, fallback: [{ type: 'text', text }], content: projected })
+      }
     }
     return value
   }

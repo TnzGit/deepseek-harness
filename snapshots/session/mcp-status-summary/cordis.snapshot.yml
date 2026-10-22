@@ -1,0 +1,44 @@
+- id: llm-deepseek
+  disabled: true
+
+- id: spill-local
+  config:
+    root: !!js process.env.DSH_SNAPSHOT_SPILL_ROOT
+
+- insert:
+    - id: snapshot-spill-locators
+      name: ../../../scripts/snapshot-spill-locators.ts
+      config:
+        root: !!js process.env.DSH_SNAPSHOT_SPILL_ROOT
+        locatorRoot: !!js process.env.DSH_SNAPSHOT_SPILL_LOCATOR_ROOT
+
+- insert:
+    - id: llm-replay
+      name: '@deepseek-ai/dsh-llm-replay'
+      config:
+        providers:
+          - id: deepseek-official
+            name: DeepSeek
+            models:
+              - id: deepseek-v4-flash
+                contextWindow: 1000000
+                defaultMaxTokens: 256000
+                reasoningEfforts: [off, low, high, max]
+                defaultReasoningEffort: max
+    - id: status-evidence-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: stdio
+        serverName: status-evidence
+        command: !!js process.execPath
+        args: !!js '[process.env.DSH_MCP_STATUS_FIXTURE]'
+        failOnStartupError: true
+        reconnect:
+          enabled: false
+        toolDiscovery:
+          searchToolName: rea_find_tools
+          callToolName: rea_call
+          resultSummaries:
+            - tool: binary_session
+              fields: ['/result/open', '/result/path', '/result/analysis_activity']
+              maxInlineBytes: 1024

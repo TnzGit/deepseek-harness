@@ -9,7 +9,12 @@ import z from '@deepseek-ai/schemastery'
 import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
-import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import {
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  contextAdaptMargin,
+  contextOverflowRetryRelief,
+  parseContextOverflowNumbers,
+} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -26,8 +31,10 @@ import {
   assertNoActiveCompaction,
   compactSurfaceRegion,
   selectCompactableRange,
+  shrinkCompactableRange,
 } from './region.ts'
-import { summarizeWithLlm } from './summarizer.ts'
+import { DEGENERATE_SUMMARY_CODE, InefficientSummaryError, summarizeWithLlm } from './summarizer.ts'
+import type {} from '@deepseek-ai/dsh-spill'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
@@ -78,6 +85,29 @@ function conversationTarget(
   return { provider: agent.options.provider, model: agent.options.model }
 }
 
+/** Decide whether a durable rewrite freed enough measured input for one safe retry. */
+function hasOverflowRetryProgress(
+  failure: { readonly message: string },
+  beforeTokens: number,
+  afterTokens: number,
+): boolean {
+  const reduction = beforeTokens - afterTokens
+  if (reduction <= 0) return false
+  const numbers = parseContextOverflowNumbers(failure.message)
+  if (numbers?.inputTokensKind === 'lower-bound') {
+    if (numbers.requestedOutputTokens === undefined) return false
+    return afterTokens + numbers.requestedOutputTokens + contextAdaptMargin(numbers.contextLength)
+      <= numbers.contextLength
+  }
+  const required = contextOverflowRetryRelief(failure.message)
+  return required === undefined || reduction >= required
+}
+
+/** Re-read a signal whose state may have changed across an awaited recovery. */
+function isSignalAborted(signal: AbortSignal): boolean {
+  return signal.aborted
+}
+
 const thresholdRatioSchema = z.number()
 const headroomTokensSchema = z.number().step(1).min(0)
 const retainRatioSchema = z.number()
@@ -87,6 +117,45 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+
+/** Maximum strict range halvings after a summary reaches its output cap or degenerates. */
+const SUMMARY_RANGE_RETRIES = 3
+
+/** Whether an error chain represents the summarizer's fail-closed token cap. */
+function isSummaryTokenCap(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === 'MAX_TOKENS') return true
+    current = current.cause
+  }
+  return false
+}
+
+/** Whether a summary attempt completed without a usable visible checkpoint. */
+function isDegenerateSummary(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if ((current as Error & { code?: string }).code === DEGENERATE_SUMMARY_CODE) return true
+    current = current.cause
+  }
+  return false
+}
+
+/** Manual maintenance classifies summary failures while preserving their cause. */
+function isInefficientSummary(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof InefficientSummaryError) return true
+    current = current.cause
+  }
+  return false
+}
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -98,6 +167,9 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   summarizationProvider: summarizationProviderSchema,
   summarizationModel: summarizationModelSchema,
   maxTokens: maxTokensSchema,
+  summaryTargetTokens: maxTokensSchema,
+  maxSummaryRatio: thresholdRatioSchema,
+  summaryRefinementRetries: compactionRetriesSchema,
   compactionRetries: compactionRetriesSchema,
   maxOverflowRetries: maxOverflowRetriesSchema,
 })
@@ -121,6 +193,9 @@ export class BasicCompactionEngine extends CompactionEngine {
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
     maxTokens: maxTokensSchema,
+    summaryTargetTokens: maxTokensSchema,
+    maxSummaryRatio: thresholdRatioSchema,
+    summaryRefinementRetries: compactionRetriesSchema,
     compactionRetries: compactionRetriesSchema,
     maxOverflowRetries: maxOverflowRetriesSchema,
     modelPolicies: z.array(modelPolicy),
@@ -164,6 +239,10 @@ export class BasicCompactionEngine extends CompactionEngine {
           const result = await this.compactIfNeeded(agent, 'pressure', signal)
           if (result !== null) logResult(result, 'step pressure')
         } catch (error: unknown) {
+          // Exhausted quality retries cannot run again at every following step.
+          // Stop with the original evidence intact instead of repeatedly spending
+          // a full summary budget on a non-converging checkpoint.
+          if (isInefficientSummary(error) || isSummaryTokenCap(error) || isDegenerateSummary(error)) throw error
           if (error instanceof TargetPressureConfigError) {
             if (this.warnedPressureConfigTargets.has(error.targetKey)) return next()
             this.warnedPressureConfigTargets.add(error.targetKey)
@@ -200,16 +279,48 @@ export class BasicCompactionEngine extends CompactionEngine {
       if (retries >= policy.maxOverflowRetries) return next()
 
       const generation = agent.session.surface.replaceGeneration
+      let beforeTokens: number
+      try {
+        beforeTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens
+      } catch (measurementError: unknown) {
+        const message = measurementError instanceof Error
+          ? measurementError.message
+          : String(measurementError)
+        ctx.logger.warn(
+          `context-overflow recovery could not measure the original surface: ${message}; `
+          + 'preserving the original request error',
+        )
+        return next()
+      }
+      const hasMeasuredRetryProgress = (): boolean => {
+        try {
+          return hasOverflowRetryProgress(
+            failure,
+            beforeTokens,
+            this.ctx.tokenMeter.measure(agent.session).totalTokens,
+          )
+        } catch (measurementError: unknown) {
+          const message = measurementError instanceof Error
+            ? measurementError.message
+            : String(measurementError)
+          ctx.logger.warn(
+            `context-overflow recovery could not remeasure the replacement surface: ${message}; `
+            + 'preserving the original request error',
+          )
+          return false
+        }
+      }
       let result: CompactionResult | null
       try {
         result = await this.compactIfNeeded(agent, 'context-overflow', signal)
       } catch (recoveryError: unknown) {
         const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
-        // A model-free prune can land before later summary work fails. That
-        // durable reduction is sufficient retry proof; do not discard it just
-        // because the optional second phase threw. Cancellation still wins.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-        if (!signal.aborted && agent.session.surface.replaceGeneration > generation) {
+        // A model-free prune can land before later summary work fails. Retry
+        // only when measured relief covers the provider's exact deficit plus
+        // recount headroom (or fits beneath a vLLM lower-bound sentinel).
+        if (!isSignalAborted(signal)
+          && agent.session.surface.replaceGeneration > generation
+          && hasMeasuredRetryProgress()) {
           ctx.logger.warn(
             `context-overflow compaction failed after durable surface progress: ${message}; `
             + 'retrying from the replacement surface',
@@ -218,16 +329,21 @@ export class BasicCompactionEngine extends CompactionEngine {
           return { kind: 'retry' }
         }
         ctx.logger.warn(
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
-          `context-overflow compaction failed: ${message}; ${signal.aborted
+          `context-overflow compaction failed: ${message}; ${isSignalAborted(signal)
             ? 'cancellation prevents retry'
             : 'preserving the original request error'}`,
         )
         return next()
       }
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
-      if (signal.aborted
+      if (isSignalAborted(signal)
         || agent.session.surface.replaceGeneration <= generation) return next()
+      if (!hasMeasuredRetryProgress()) {
+        ctx.logger.warn(
+          'context-overflow compaction did not free enough estimated input tokens; '
+          + 'preserving the original request error',
+        )
+        return next()
+      }
       if (result !== null) logResult(result, 'context overflow recovery')
       this.overflowRetries.set(agent, retries + 1)
       return { kind: 'retry' }
@@ -361,15 +477,63 @@ export class BasicCompactionEngine extends CompactionEngine {
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<CompactionResult> {
-    return compactSurfaceRegion(
-      this.regionDependencies(),
-      agent.session,
-      start,
-      end,
+    return this.compactRangeWithFallback(
+      { start, end },
       agent,
-      { owner: 'current-turn', stability: 'whole-surface' },
-      signal,
+      (range, refinement) => compactSurfaceRegion(
+        this.regionDependencies(agent, refinement),
+        agent.session,
+        range.start,
+        range.end,
+        agent,
+        { owner: 'current-turn', stability: 'whole-surface' },
+        signal,
+      ),
     )
+  }
+
+  /** Retry a truncated or degenerate summary over progressively smaller balanced prefixes. */
+  private async compactRangeWithFallback(
+    initial: { readonly start: SessionSeq; readonly end: SessionSeq },
+    agent: Agent,
+    run: (range: { readonly start: SessionSeq; readonly end: SessionSeq }, refinement: number) => Promise<CompactionResult>,
+  ): Promise<CompactionResult> {
+    let range = initial
+    const target = conversationTarget(agent)
+    const policy = target === undefined ? this.config : resolveTargetPolicy(this.config, target)
+    const summaryCap = policy.maxTokens
+    let refinement = 0
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.ctx.logger.info(
+          `compaction summary attempt ${attempt + 1}/${SUMMARY_RANGE_RETRIES + 1}: `
+          + `seqs ${range.start}-${range.end}, maxTokens=${summaryCap}, reasoning=off`,
+        )
+        return await run(range, refinement)
+      } catch (error: unknown) {
+        if (isInefficientSummary(error)) {
+          if (refinement >= policy.summaryRefinementRetries) throw error
+          refinement += 1
+          this.ctx.logger.warn(`compaction checkpoint saved too little space; regenerating original evidence with a tighter target (refinement ${refinement})`)
+          continue
+        }
+        const tokenCap = isSummaryTokenCap(error)
+        const degenerate = isDegenerateSummary(error)
+        if ((!tokenCap && !degenerate) || attempt >= SUMMARY_RANGE_RETRIES) throw error
+        const smaller = shrinkCompactableRange(
+          agent.session,
+          this.ctx.tokenMeter.measure(agent.session),
+          range,
+        )
+        if (smaller === null) throw error
+        this.ctx.logger.warn(
+          `compaction summary ${tokenCap ? 'reached its token cap' : 'produced no usable checkpoint'}; `
+          + 'retrying a smaller balanced range '
+          + `(seqs ${range.start}-${range.end} -> ${smaller.start}-${smaller.end})`,
+        )
+        range = smaller
+      }
+    }
   }
 
   /**
@@ -397,21 +561,25 @@ export class BasicCompactionEngine extends CompactionEngine {
             0,
           )
           if (range === null) return null
-          return await compactSurfaceRegion(
-            this.regionDependencies(),
-            agent.session,
-            range.start,
-            range.end,
+          return await this.compactRangeWithFallback(
+            range,
             agent,
-            {
-              owner: null,
-              stability: 'selected-span',
-              ...sourceCommandId === undefined ? {} : { sourceCommandId },
-              flush: async () => {
-                await this.ctx.sessions.flush(agent.session)
+            (candidate, refinement) => compactSurfaceRegion(
+              this.regionDependencies(agent, refinement),
+              agent.session,
+              candidate.start,
+              candidate.end,
+              agent,
+              {
+                owner: null,
+                stability: 'selected-span',
+                ...sourceCommandId === undefined ? {} : { sourceCommandId },
+                flush: async () => {
+                  await this.ctx.sessions.flush(agent.session)
+                },
               },
-            },
-            operationSignal,
+              operationSignal,
+            ),
           )
         } catch (error: unknown) {
           if (agentSignal.aborted && operationSignal.reason === agentSignal.reason) {
@@ -435,9 +603,25 @@ export class BasicCompactionEngine extends CompactionEngine {
   }
 
   /** Bind the effective token meter and dynamically dispatched summarizer hook. */
-  private regionDependencies(): Parameters<typeof compactSurfaceRegion>[0] {
+  private regionDependencies(agent: Agent, refinement: number): Parameters<typeof compactSurfaceRegion>[0] {
+    const target = conversationTarget(agent)
+    const policy = target === undefined ? this.config : resolveTargetPolicy(this.config, target)
     return {
       meter: this.ctx.tokenMeter,
+      summaryTargetTokens: policy.summaryTargetTokens,
+      maxSummaryRatio: policy.maxSummaryRatio,
+      refinement,
+      archive: async (input, start, end) => {
+        const store = this.ctx.get('spillStore')
+        if (store === undefined) return undefined
+        const ref = await store.saveText({
+          owner: { sessionId: agent.session.id },
+          source: { kind: 'session-reference', sessionId: agent.session.id, label: `compaction source seqs ${start}-${end}` },
+          suggestedName: `compaction-evidence-${start}-${end}.json`,
+          content: JSON.stringify({ sessionId: agent.session.id, startSeq: start, endSeq: end, messages: input.messages }),
+        })
+        return `${ref.locator} (${ref.bytes} UTF-8 bytes; session ${agent.session.id}, seqs ${start}-${end}). ${ref.retrievalHint}`
+      },
       summarize: (input, owner, abort) => this.summarize(input, owner, abort),
       recover: (error, agent, sourceEventSeqs, signal) => this.ctx.waterfall('compaction/summary-error', {
         session: agent.session,

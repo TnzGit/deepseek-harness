@@ -497,9 +497,10 @@ describe('SubagentLimitsCardController', () => {
     const host = stubConfigForm<SubagentLimitsSettings>()
     const face = new SubagentLimitsCardController(host.scope).inject()
     const state = () => face.hooks.subagentLimitsCard.getSnapshot()
-    host.publish({ status: 'ready', writable: true, value: { maxDepth: 3, maxActiveSubagents: 8 }, base: { maxDepth: 3, maxActiveSubagents: 8 }, user: {} })
+    host.publish({ status: 'ready', writable: true, value: { maxDepth: 3, maxActiveSubagents: 8, maxConcurrentRuns: 8 }, base: { maxDepth: 3, maxActiveSubagents: 8, maxConcurrentRuns: 8 }, user: {} })
     acceptWrites(host)
     expect(state().maxActiveSubagents.text).toBe('8')
+    expect(state().maxConcurrentRuns.text).toBe('8')
     for (const draft of ['-1', '1.5', '9007199254740992', 'wat', '-0']) {
       face.edit('maxDepth', draft)
       expect(state().invalid).toBe(true)
@@ -508,16 +509,20 @@ describe('SubagentLimitsCardController', () => {
     face.edit('maxActiveSubagents', '0')
     expect(state().invalid).toBe(true)
     face.edit('maxActiveSubagents', '12')
+    face.edit('maxConcurrentRuns', '0')
+    expect(state().invalid).toBe(true)
+    face.edit('maxConcurrentRuns', '2')
     expect(host.set).not.toHaveBeenCalled()
     face.save()
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
-    expect(host.scope.getSnapshot().value).toEqual({ maxDepth: 0, maxActiveSubagents: 12 })
+    expect(host.scope.getSnapshot().value).toEqual({ maxDepth: 0, maxActiveSubagents: 12, maxConcurrentRuns: 2 })
     face.resetField('maxDepth')
     face.edit('maxActiveSubagents', '')
+    face.edit('maxConcurrentRuns', '')
     expect(state().invalid).toBe(false)
     face.save()
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
-    expect(host.scope.getSnapshot().value).toEqual({ maxDepth: 3, maxActiveSubagents: 8 })
+    expect(host.scope.getSnapshot().value).toEqual({ maxDepth: 3, maxActiveSubagents: 8, maxConcurrentRuns: 8 })
   })
 })
 
@@ -529,8 +534,8 @@ describe('shared Subagent card actions', () => {
     const modelFace = new SubagentModelSelectionCardController(models.scope, modelsApi().ctx).inject()
     limits.publish({
       status: 'ready', writable: true, revision: 2,
-      value: { maxDepth: 3, maxActiveSubagents: 8 },
-      base: { maxDepth: 3, maxActiveSubagents: 8 }, user: {},
+      value: { maxDepth: 3, maxActiveSubagents: 8, maxConcurrentRuns: 8 },
+      base: { maxDepth: 3, maxActiveSubagents: 8, maxConcurrentRuns: 8 }, user: {},
     })
     models.publish({
       status: 'ready', writable: true, revision: 5,
@@ -574,7 +579,7 @@ describe('shared Subagent card actions', () => {
     const pending = deferred<undefined>()
     const set = vi.spyOn(limits.scope, 'mutate').mockImplementationOnce(async () => {
       await pending.promise
-      limits.publish({ value: { maxDepth: 2, maxActiveSubagents: 8 }, user: { maxDepth: 2 } })
+      limits.publish({ value: { maxDepth: 2, maxActiveSubagents: 8, maxConcurrentRuns: 8 }, user: { maxDepth: 2 } })
       return true
     })
     face.editLimit('maxDepth', '2')

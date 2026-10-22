@@ -183,15 +183,15 @@ describe('dsh-subagent-fork-in-process', () => {
   it('does NOT return the seeded parent output when the child produces no message of its own', async () => {
     // `readResult` must scan only child-owned events after the seed. The child emits no assistant
     // message, so scanning the whole log would incorrectly return the parent's distinctive text.
-    const { ctx, parent } = await setup([textResponse('parent stale'), emptyStop])
+    const { ctx, parent } = await setup([textResponse('parent stale'), emptyStop, emptyStop])
     parent.followup(createUserMessage({ content: [{ type: 'text', text: 'parent question' }], source: { kind: 'user' } }))
     await parent.whenIdle()
 
     const run = await start(ctx, 'fork', { prompt: [{ type: 'text', text: 'child question' }], parent })
     const result = await run.result
-    // The child completed its own (empty) turn — completed, but with NO output
-    // borrowed from the seeded parent prefix.
-    expect(result.stopReason).toBe('completed')
+    // The child retries its empty stop once, then reports a degenerate response
+    // without borrowing output from the seeded parent prefix.
+    expect(result.stopReason).toBe('error')
     expect(result.output).toEqual([])
     await run.dispose()
   })

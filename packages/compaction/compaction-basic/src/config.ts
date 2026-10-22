@@ -31,6 +31,9 @@ const POLICY_CONFIG_KEYS = [
   'summarizationProvider',
   'summarizationModel',
   'maxTokens',
+  'summaryTargetTokens',
+  'maxSummaryRatio',
+  'summaryRefinementRetries',
   'compactionRetries',
   'maxOverflowRetries',
 ] as const
@@ -102,6 +105,9 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     summarizationProvider: config.summarizationProvider ?? '',
     summarizationModel: config.summarizationModel ?? '',
     maxTokens,
+    summaryTargetTokens: config.summaryTargetTokens ?? 8192,
+    maxSummaryRatio: config.maxSummaryRatio ?? 0.35,
+    summaryRefinementRetries: config.summaryRefinementRetries ?? 1,
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
     modelPolicies,
@@ -133,6 +139,9 @@ export function resolveTargetPolicy(
     summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider,
     summarizationModel: override?.summarizationModel ?? config.summarizationModel,
     maxTokens: override?.maxTokens ?? config.maxTokens,
+    summaryTargetTokens: override?.summaryTargetTokens ?? config.summaryTargetTokens,
+    maxSummaryRatio: override?.maxSummaryRatio ?? config.maxSummaryRatio,
+    summaryRefinementRetries: override?.summaryRefinementRetries ?? config.summaryRefinementRetries,
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
   })
@@ -211,6 +220,9 @@ export function resolveCompactSpec(
     summarizationProvider: policy.summarizationProvider,
     summarizationModel: policy.summarizationModel,
     maxTokens: policy.maxTokens,
+    summaryTargetTokens: policy.summaryTargetTokens,
+    maxSummaryRatio: policy.maxSummaryRatio,
+    summaryRefinementRetries: policy.summaryRefinementRetries,
     compactionRetries: policy.compactionRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
   })
@@ -293,6 +305,11 @@ function validatePolicy(
     throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`)
   }
   if (maxTokens !== undefined) assertPositiveInteger(`${name}.maxTokens`, maxTokens)
+  if (config.summaryTargetTokens !== undefined) assertPositiveInteger(`${name}.summaryTargetTokens`, config.summaryTargetTokens)
+  if (config.maxSummaryRatio !== undefined) assertRatio(`${name}.maxSummaryRatio`, config.maxSummaryRatio)
+  if (config.summaryRefinementRetries !== undefined) {
+    assertNonNegativeInteger(`${name}.summaryRefinementRetries`, config.summaryRefinementRetries)
+  }
   if (compactionRetries !== undefined) {
     assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries)
   }

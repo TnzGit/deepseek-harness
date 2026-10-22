@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package keeps long agent conversations working near the model's context limit. As token pressure builds, it condenses the oldest history into a summary while preserving recent messages; after a context-overflow error, it condenses and retries. You can also request condensation with `/compact` and optionally trim oversized tool outputs first. Condensation uses one extra model request and retains only its summary text. It cannot reduce the system prompt, tools, or session prefix, or split one indivisible unit such as a single huge tool call.
+This package keeps long agent conversations working near the model's context limit. It condenses older history while preserving recent messages, recovers from context overflow, and supports `/compact`. Checkpoints have independent size and savings targets; incomplete or repeatedly oversized summaries never replace the original history. With spill storage, full source evidence remains retrievable outside the active prompt. Condensation costs a bounded number of extra model requests. It cannot reduce the system prompt or tool definitions, or split one indivisible tool step.
 
 ## Table of Contents
 
@@ -70,6 +70,9 @@ All settings are optional. With context window `W`, effective request output cap
 | `summarizationProvider` | `''` | Set together with `summarizationModel`; an empty pair uses the latest routed request target, then the `AgentOptions` pair. |
 | `summarizationModel` | `''` | Set together with `summarizationProvider`; an empty pair uses the latest routed request target, then the `AgentOptions` pair. |
 | `maxTokens` | `headroomTokens` (`65536`) | Positive summary output cap, including any provider-counted reasoning tokens. Explicit per-model caps override explicit global caps; otherwise the cap follows the resolved headroom. |
+| `summaryTargetTokens` | `8192` | Maximum framed checkpoint target, independent of normal Agent output limits. |
+| `maxSummaryRatio` | `0.35` | Summary-body budget divided by route-priced source tokens; framing and evidence references are additional. The complete checkpoint must still shrink its source. |
+| `summaryRefinementRetries` | `1` | Regenerations from original evidence with a halved target. Exhaustion preserves the original surface and stops automatic step progression with an explicit error. |
 | `compactionRetries` | `1` | Extra condensation attempts after the first when pressure remains above threshold. |
 | `maxOverflowRetries` | `1` | Maximum retries after a confirmed context-window overflow; `0` disables recovery only. |
 | `modelPolicies` | `[]` | Exact `{ provider, model, ...partialPolicy }` overrides for individual model routes. |
@@ -82,6 +85,10 @@ Misconfiguration fails fast: unknown settings, duplicate per-model overrides, in
 The oldest balanced span is replaced by one summary message and the recent tail stays verbatim; the conversation continues from the summary. The operation reports how many history items were condensed and the estimated tokens freed. If nothing can be condensed safely — for example the whole conversation is one indivisible unit — nothing changes and nothing is written to the session log. If no model is available to write the summary (no configured target and no routed request yet), condensation fails with a clear error telling you to configure the summarization provider and model or route one request.
 
 ### On-demand condensation with /compact
+
+Checkpoint requests receive a body budget after framing and evidence-reference costs, bounded by `summaryTargetTokens` and `maxSummaryRatio`. Their actual generation cap is the smaller of `maxTokens` and twice this body budget; ordinary Agent requests are unchanged. Complete checkpoints must pass size and savings checks before replacement. Text-only provider output counts supplement heuristic pricing; hidden reasoning is not counted as checkpoint text. Truncated output is never adopted. Exhausted truncation or degenerate-summary retries also stop automatic step progression, rather than rerunning failed condensation at every subsequent step.
+
+With `spillStore`, the backend saves the complete selected conversation messages before summarization and adds the artifact locator, source session, event range, and retrieval guidance to the checkpoint. Read or search that artifact for detailed evidence rather than copying large listings into each summary. Existing session events remain unchanged; artifact retention follows the spill backend. Without storage, source events remain in session history but no artifact reference is promised. Failed evidence writes prevent replacement.
 
 With `dsh-command-compact` mounted, type `/compact` in a chat UI to condense immediately, even below the pressure threshold. The command reports how many history items were condensed and the estimated tokens saved. While the agent is mid-turn or condensation is already running, `/compact` reports that condensation is unavailable; prompts you send while it runs are accepted and start after it finishes.
 
